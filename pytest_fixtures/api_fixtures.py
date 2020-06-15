@@ -29,13 +29,13 @@ if not settings.configured:
 
 
 @pytest.fixture(scope='session')
-def default_lce():
-    return entities.LifecycleEnvironment().search(query={'search': 'name=Library'})[0]
+def default_org():
+    return entities.Organization().search(query={'search': 'name="Default Organization"'})[0]
 
 
-@pytest.fixture(scope='module')
-def module_lce(module_org):
-    return entities.LifecycleEnvironment(organization=module_org).create()
+@pytest.fixture(scope='session')
+def default_location():
+    return entities.Location().search(query={'search': 'name="Default Location"'})[0]
 
 
 @pytest.fixture(scope='module')
@@ -46,6 +46,16 @@ def module_org():
 @pytest.fixture(scope='module')
 def module_location(module_org):
     return entities.Location(organization=[module_org]).create()
+
+
+@pytest.fixture(scope='session')
+def default_lce():
+    return entities.LifecycleEnvironment().search(query={'search': 'name=Library'})[0]
+
+
+@pytest.fixture(scope='module')
+def module_lce(module_org):
+    return entities.LifecycleEnvironment(organization=module_org).create()
 
 
 @pytest.fixture(scope='session')
