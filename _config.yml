@@ -20,3 +20,5 @@ highlighter: pygments
 safe: true
 lsi: false
 source: .
+
+theme: jekyll-theme-architect
