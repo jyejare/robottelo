@@ -289,6 +289,85 @@ class DiscoveryTestCase(APITestCase):
             )
 
     @tier3
+    def test_positive_provision_pxe_host_dhcp_change(self):
+        """Provision a pxe-based discovered hosts
+
+        :id: 7ab654de-16dd-4a8b-946d-f6adde310340
+
+        :bz: 1367549
+
+        :Setup: Provisioning should be configured and a host should be
+            discovered
+
+        :Steps: PUT /api/v2/discovered_hosts/:id
+
+        :expectedresults: Host should be provisioned successfully
+
+        :CaseImportance: Critical
+        """
+        if not self.configured_env:
+            self.__class__.configured_env = configure_env_for_provision(
+                org={'id': self.org.id, 'name': self.org.name},
+                loc={'id': self.loc.id, 'name': self.loc.name},
+            )
+        subnet = entities.Subnet(id=self.configured_env['subnet']['id']).read()
+        # Updating satellite subnet component and dhcp conf ranges
+        # Storing now for restoring later
+        old_sub_from = subnet.from_
+        old_sub_to = subnet.to
+        old_sub_from_4o = old_sub_from.split('.')[-1]
+        old_sub_to_4o = old_sub_to.split('.')[-1]
+        # Calculating Subnet's new `from` range in Satellite Subnet Component
+        new_subnet_from = subnet.from_.replace(
+            f'.{old_sub_from_4o}', f'.{str(int(old_sub_to_4o)-9)}'
+        )
+        # Same time, calculating dhcp confs new `to` range
+        new_dhcp_conf_to = subnet.to.replace(f'.{old_sub_to_4o}', f'.{str(int(old_sub_to_4o)-10)}')
+        try:
+            # updating the ranges in component and in dhcp.conf
+            subnet.from_ = new_subnet_from
+            subnet.update(['from_'])
+            ssh.command(
+                f'sed -ie \'s/{subnet.to}/{new_dhcp_conf_to}/\' /etc/dhcp/dhcpd.conf && '
+                f'systemctl restart dhcpd'
+            )
+            with LibvirtGuest() as pxe_host:
+                hostname = pxe_host.guest_name
+                discovered_host = self._assertdiscoveredhost(hostname)
+                # Assert Discovered host discovered within dhcp.conf range before provisioning
+                assert int(discovered_host.ip.split('.')[-1]) <= int(
+                    new_dhcp_conf_to.split('.')[-1]
+                )
+                # Provision just discovered host
+                discovered_host.hostgroup = entities.HostGroup(
+                    id=self.configured_env['hostgroup']['id']
+                ).read()
+                discovered_host.root_pass = gen_string('alphanumeric')
+                discovered_host.update(['hostgroup', 'root_pass'])
+                # Assertions
+                provisioned_host = entities.Host().search(
+                    query={
+                        'search': 'name={}.{}'.format(
+                            discovered_host.name, self.configured_env['domain']['name']
+                        )
+                    }
+                )[0]
+                assert int(provisioned_host.ip.split('.')[-1]) >= int(
+                    new_subnet_from.split('.')[-1]
+                )
+                assert int(provisioned_host.ip.split('.')[-1]) <= int(old_sub_to_4o)
+                assert not entities.DiscoveredHost().search(
+                    query={'search': 'name={}'.format(discovered_host.name)}
+                )
+        finally:
+            subnet.from_ = old_sub_from
+            subnet.update(['from_'])
+            ssh.command(
+                f'sed -ie \'s/range {new_dhcp_conf_to}/range {old_sub_to}/\' '
+                f'/etc/dhcp/dhcpd.conf && systemctl restart dhcpd'
+            )
+
+    @tier3
     def test_positive_provision_pxe_host_non_admin(self):
         """Provision a pxe-based discovered hosts by non-admin user
 

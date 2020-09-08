@@ -294,7 +294,7 @@ def configure_provisioning(org=None, loc=None, compute=False, os=None):
         raise ImproperlyConfigured('settings file is not configured for rhel os')
     # Create a new Life-Cycle environment
     lc_env = entities.LifecycleEnvironment(organization=org).create()
-    # Create a Product, Repository for custom RHEL6 contents
+    # Create a Product, Repository for custom RHEL7 contents
     product = entities.Product(organization=org).create()
     repo = entities.Repository(
         product=product, url=settings.rhel7_os, download_policy='immediate'
@@ -332,8 +332,7 @@ def configure_provisioning(org=None, loc=None, compute=False, os=None):
     )
     proxy = proxy[0].read()
     proxy.location.append(loc)
-    proxy.organization.append(org)
-    proxy = proxy.update(['location', 'organization'])
+    proxy = proxy.update(['location'])
 
     # Search for existing domain or create new otherwise. Associate org,
     # location and dns to it
@@ -417,9 +416,9 @@ def configure_provisioning(org=None, loc=None, compute=False, os=None):
         .search(query={'search': 'name="{0}"'.format(DEFAULT_PTABLE)})[0]
         .read()
     )
-    ptable.location.append(loc)
-    ptable.organization.append(org)
-    ptable = ptable.update(['location', 'organization'])
+    # ptable.location.append(loc)
+    # ptable.organization.append(org)
+    # ptable = ptable.update(['location', 'organization'])
 
     # Get the OS ID
     if os is None:
@@ -455,10 +454,14 @@ def configure_provisioning(org=None, loc=None, compute=False, os=None):
     )
     provisioning_template = provisioning_template[0].read()
     provisioning_template.operatingsystem.append(os)
-    provisioning_template.organization.append(org)
-    provisioning_template.location.append(loc)
+    # provisioning_template.organization.append(org)
+    # provisioning_template.location.append(loc)
     provisioning_template = provisioning_template.update(
-        ['location', 'operatingsystem', 'organization']
+        [
+            # 'location',
+            'operatingsystem',
+            # 'organization'
+        ]
     )
 
     # Get the PXE template ID and update with OS, Org, location
@@ -467,9 +470,15 @@ def configure_provisioning(org=None, loc=None, compute=False, os=None):
     )
     pxe_template = pxe_template[0].read()
     pxe_template.operatingsystem.append(os)
-    pxe_template.organization.append(org)
-    pxe_template.location.append(loc)
-    pxe_template = pxe_template.update(['location', 'operatingsystem', 'organization'])
+    # pxe_template.organization.append(org)
+    # pxe_template.location.append(loc)
+    pxe_template = pxe_template.update(
+        [
+            # 'location',
+            'operatingsystem',
+            # 'organization'
+        ]
+    )
 
     # Get the arch ID
     arch = (

@@ -10,6 +10,7 @@
 
 :Upstream: No
 """
+import pytest
 from fauxfactory import gen_string
 from nailgun import entities
 from wrapanapi import RHEVMSystem
@@ -74,23 +75,6 @@ class ComputeResourceHostTestCase(CLITestCase):
             cls.quota = dc.quotas_service().list()[0].id
         else:
             cls.quota = 'Default'
-
-        # Vmware Settings
-        cls.vmware_server = settings.vmware.vcenter
-        cls.vmware_password = settings.vmware.password
-        cls.vmware_username = settings.vmware.username
-        cls.vmware_datacenter = settings.vmware.datacenter
-        cls.vmware_img_name = settings.vmware.image_name
-        cls.vmware_img_arch = settings.vmware.image_arch
-        cls.vmware_img_os = settings.vmware.image_os
-        cls.vmware_img_user = settings.vmware.image_username
-        cls.vmware_img_pass = settings.vmware.image_password
-        cls.vmware_vm_name = settings.vmware.vm_name
-        cls.current_interface = VMWARE_CONSTANTS.get('network_interfaces') % bridge
-        cls.vmware_api = VMWareSystem(
-            hostname=cls.vmware_server, username=cls.vmware_username, password=cls.vmware_password
-        )
-        cls.vmware_net_id = cls.vmware_api.get_network(cls.current_interface)._moId
 
         # Provisioning setup
         cls.org = entities.Organization(name=gen_string('alpha')).create()
@@ -186,8 +170,66 @@ class ComputeResourceHostTestCase(CLITestCase):
         with self.assertNotRaises(ProvisioningCheckError):
             host_provisioning_check(ip_addr=host_ip)
 
+
+class TestVMWareComputeResourceHost:
+    """VMWare Based Provisioning Tests"""
+
+    @pytest.fixture(scope='class', autouse=True)
+    def VMWareSetup(self, request, module_org, module_location):
+        """Setup prerequisites for VMWare"""
+        request.cls.org = module_org
+        request.cls.loc = module_location
+        request.cls.bridge = settings.vlan_networking.bridge
+        request.cls.vmware_server = settings.vmware.vcenter
+        request.cls.vmware_password = settings.vmware.password
+        request.cls.vmware_username = settings.vmware.username
+        request.cls.vmware_datacenter = settings.vmware.datacenter
+        request.cls.vmware_img_name = settings.vmware.image_name
+        request.cls.vmware_img_arch = settings.vmware.image_arch
+        request.cls.vmware_img_os = settings.vmware.image_os
+        request.cls.vmware_img_user = settings.vmware.image_username
+        request.cls.vmware_img_pass = settings.vmware.image_password
+        request.cls.vmware_vm_name = settings.vmware.vm_name
+        request.cls.current_interface = VMWARE_CONSTANTS.get('network_interfaces') % self.bridge
+        request.cls.vmware_api = VMWareSystem(
+            hostname=self.vmware_server,
+            username=self.vmware_username,
+            password=self.vmware_password,
+        )
+        request.cls.vmware_net_id = self.vmware_api.get_network(self.current_interface)._moId
+
+    @classmethod
+    def teardown_class(cls):
+        """Remove all Hosts created in this org."""
+        hosts = entities.Host(organization=cls.org).search()
+        for host in hosts:
+            host.delete()
+
+    @pytest.fixture(scope='class')
+    def VMWare_CR(self):
+        """Fixture for VMWare Compute Resource"""
+        cr_name = gen_string('alpha')
+        return make_compute_resource(
+            {
+                'name': cr_name,
+                'organizations': self.org.name,
+                'locations': self.loc.name,
+                'provider': FOREMAN_PROVIDERS['vmware'],
+                'server': self.vmware_server,
+                'user': self.vmware_username,
+                'password': self.vmware_password,
+                'datacenter': self.vmware_datacenter,
+            }
+        )
+
+    @pytest.fixture(scope='class')
+    def configured_provisioning(self):
+        return configure_provisioning(
+            compute=True, org=self.org, loc=self.loc, os=settings.rhev.image_os
+        )
+
     @tier3
-    def test_positive_provision_vmware_with_host_group(self):
+    def test_positive_provision_vmware_with_host_group(self, configured_provisioning, VMWare_CR):
         """ Provision a host on vmware compute resource with
         the help of hostgroup.
 
@@ -216,41 +258,25 @@ class ComputeResourceHostTestCase(CLITestCase):
 
         :CaseLevel: System
         """
-        cr_name = gen_string('alpha')
-        vmware_cr = make_compute_resource(
-            {
-                'name': cr_name,
-                'organizations': self.org_name,
-                'locations': self.loc_name,
-                'provider': FOREMAN_PROVIDERS['vmware'],
-                'server': self.vmware_server,
-                'user': self.vmware_username,
-                'password': self.vmware_password,
-                'datacenter': self.vmware_datacenter,
-            }
-        )
-        self.assertEquals(vmware_cr['name'], cr_name)
         host_name = gen_string('alpha').lower()
         host = make_host(
             {
                 'name': '{0}'.format(host_name),
                 'root-password': gen_string('alpha'),
-                'organization': self.org_name,
-                'location': self.loc_name,
-                'hostgroup': self.config_env['host_group'],
+                'organization': self.org.name,
+                'location': self.loc.name,
+                'hostgroup': configured_provisioning['host_group'],
                 'pxe-loader': 'PXELinux BIOS',
-                'compute-resource-id': vmware_cr.get('id'),
+                'compute-resource-id': VMWare_CR.get('id'),
                 'compute-attributes': "cpus=2,"
                 "corespersocket=2,"
                 "memory_mb=4028,"
                 "cluster={0},"
                 "path=/Datacenters/{1}/vm/QE,"
                 "guest_id=rhel7_64Guest,"
-                "scsi_controller_type=VirtualLsiLogicController,"
+                "scsi_controllers='type=VirtualLsiLogicController,key=1000',"
                 "hardware_version=Default,"
                 "start=1".format(VMWARE_CONSTANTS['cluster'], self.vmware_datacenter),
-                'ip': None,
-                'mac': None,
                 'interface': "compute_network={0},"
                 "compute_type=VirtualVmxnet3".format(self.vmware_net_id),
                 'volume': "name=Hard disk,"
@@ -261,12 +287,81 @@ class ComputeResourceHostTestCase(CLITestCase):
                 'provision-method': 'build',
             }
         )
-        hostname = '{0}.{1}'.format(host_name, self.config_env['domain'])
-        self.assertEquals(hostname, host['name'])
+        hostname = '{0}.{1}'.format(host_name, configured_provisioning['domain'])
+        assert hostname == host['name']
         # Check on Vmware, if VM exists
-        self.assertTrue(self.vmware_api.does_vm_exist(hostname))
+        assert self.vmware_api.does_vm_exist(hostname)
         host_info = Host.info({'name': hostname})
         host_ip = host_info.get('network').get('ipv4-address')
         # Start to run a ping check if network was established on VM
-        with self.assertNotRaises(ProvisioningCheckError):
+        with not pytest.raises(ProvisioningCheckError):
+            host_provisioning_check(ip_addr=host_ip)
+
+    @tier3
+    def test_positive_provision_vmware_with_host_group_bootdisk(
+        self, configured_provisioning, VMWare_CR
+    ):
+        """Provision a bootdisk based host on VMWare compute resource.
+
+        :Requirement: Computeresource Vmware
+
+        :CaseComponent: ComputeResources-VMWare
+
+        :id: bc5f457d-c29a-4c62-bbdc-af8f4f813519
+
+        :bz: 1679225
+
+        :setup:
+
+            1. Vaild VMWare hostname, credentials.
+            2. Configure provisioning setup.
+            3. Configure host group setup.
+
+        :steps: Using Hammer CLI, Provision a VM on VMWare with hostgroup and
+            provisioning method as `bootdisk`.
+
+        :expectedresults: The host should be provisioned with provisioning type bootdisk
+
+        :CaseAutomation: Automated
+
+        :CaseLevel: System
+        """
+        host_name = gen_string('alpha').lower()
+        host = make_host(
+            {
+                'name': '{0}'.format(host_name),
+                'root-password': gen_string('alpha'),
+                'organization': self.org.name,
+                'location': self.loc.name,
+                'hostgroup': configured_provisioning['host_group'],
+                'pxe-loader': 'PXELinux BIOS',
+                'compute-resource-id': VMWare_CR.get('id'),
+                'content-source-id': '1',
+                'compute-attributes': "cpus=2,"
+                "corespersocket=2,"
+                "memory_mb=4028,"
+                "cluster={0},"
+                "path=/Datacenters/{1}/vm/QE,"
+                "guest_id=rhel7_64Guest,"
+                "scsi_controllers=`type=VirtualLsiLogicController,key=1000',"
+                "hardware_version=Default,"
+                "start=1".format(VMWARE_CONSTANTS['cluster'], self.vmware_datacenter),
+                'interface': "compute_network={0},"
+                "compute_type=VirtualVmxnet3".format(self.vmware_net_id),
+                'volume': "name=Hard disk,"
+                "size_gb=10,"
+                "thin=true,"
+                "eager_zero=false,"
+                "datastore={0}".format(VMWARE_CONSTANTS['datastore'].split()[0]),
+                'provision-method': 'bootdisk',
+            }
+        )
+        hostname = '{0}.{1}'.format(host_name, configured_provisioning['domain'])
+        assert hostname == host['name']
+        # Check on Vmware, if VM exists
+        assert self.vmware_api.does_vm_exist(hostname)
+        host_info = Host.info({'name': hostname})
+        host_ip = host_info.get('network').get('ipv4-address')
+        # Start to run a ping check if network was established on VM
+        with not pytest.raises(ProvisioningCheckError):
             host_provisioning_check(ip_addr=host_ip)
