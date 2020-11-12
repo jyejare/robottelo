@@ -1,17 +1,10 @@
 """Test for Remote Execution
-
 :Requirement: Upgraded Satellite
-
 :CaseAutomation: Automated
-
 :CaseLevel: Acceptance
-
 :CaseComponent: API
-
 :TestType: Functional
-
 :CaseImportance: High
-
 :Upstream: No
 """
 import pytest
@@ -21,22 +14,20 @@ from nailgun.entity_mixins import TaskFailedError
 
 from robottelo.api.utils import wait_for_tasks
 from robottelo.config import settings
+from robottelo.decorators import destructive
+from robottelo.decorators import tier4
 from robottelo.helpers import add_remote_execution_ssh_key
 from robottelo.vm_capsule import CapsuleVirtualMachine
 
 
-@pytest.mark.tier4
+@tier4
 def test_positive_run_capsule_upgrade_playbook():
     """Run Capsule Upgrade playbook against an External Capsule
-
     :id: 9ec6903d-2bb7-46a5-8002-afc74f06d83b
-
     :steps:
         1. Create a Capsule VM, add REX key.
         2. Run the Capsule Upgrade Playbook.
-
     :expectedresults: Capsule is upgraded successfully
-
     :CaseImportance: Medium
     """
     with CapsuleVirtualMachine() as capsule_vm:
@@ -66,22 +57,20 @@ def test_positive_run_capsule_upgrade_playbook():
             id=entities.SmartProxy(name=capsule_vm.hostname).search()[0].id
         ).refresh()
         feature_list = [feat['name'] for feat in result['features']]
-        assert {'SSH', 'TFTP', 'HTTPBoot', 'Dynflow', 'Pulp Node', 'Logs'}.issubset(feature_list)
+        assert set(['SSH', 'TFTP', 'HTTPBoot', 'Dynflow', 'Pulp Node', 'Logs']).issubset(
+            feature_list
+        )
 
 
-@pytest.mark.destructive
+@destructive
 def test_negative_run_capsule_upgrade_playbook_on_satellite(default_org):
     """Run Capsule Upgrade playbook against the Satellite itself
-
     :id: 99462a11-5133-415d-ba64-4354da539a34
-
     :steps:
         1. Add REX key to the Satellite server.
         2. Run the Capsule Upgrade Playbook.
         3. Check the job output for proper failure reason.
-
     :expectedresults: Should fail
-
     :CaseImportance: Medium
     """
     sat = entities.Host().search(query={'search': f'name={settings.server.hostname}'})[0].read()
