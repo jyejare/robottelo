@@ -29,7 +29,6 @@ def is_open_bz(issue, data=None):
         issue {str} -- The BZ reference e.g: BZ:123456
         data {dict} -- Issue data indexed by <handler>:<number> or None
     """
-
     bz = try_from_cache(issue, data)
     if bz.get("is_open") is not None:  # bug has been already processed
         return bz["is_open"]

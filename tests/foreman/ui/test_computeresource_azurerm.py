@@ -149,6 +149,7 @@ def test_positive_end_to_end_azurerm_ft_host_provision(
             assert azurecloud_vm.ip == host_info['properties']['properties_table']['IP Address']
             assert azurecloud_vm.type == AZURERM_VM_SIZE_DEFAULT
 
+            import pdb; pdb.set_trace()
             # Host Delete
             session.host.delete(fqdn)
             assert not session.host.search(fqdn)

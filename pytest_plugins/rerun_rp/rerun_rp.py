@@ -15,7 +15,7 @@ class LaunchError(Exception):
 
 
 def _transform_rp_tests_to_pytest(tests):
-    """Formating test names toc check 'member of pytest test items' operation
+    """Formatting test names to check 'member of pytest test items' operation
 
     :param list tests: The list of tests those name to be changed
     :return list: The transformed list of tests
@@ -66,7 +66,7 @@ def _validate_launch(launch, sat_version):
     fail_threshold = settings.report_portal.fail_threshold
     if fail_percent > fail_threshold:
         raise LaunchError(
-            f'The latest launch of Satellite verson {sat_version} has {fail_percent}% tests '
+            f'The latest launch of Satellite version {sat_version} has {fail_percent}% tests '
             f'failed. Which is higher than the threshold of {fail_threshold}%. '
             'Examine the failures thoroughly and check for any major issue.'
         )
@@ -79,7 +79,7 @@ def pytest_addoption(parser):
 
         Usage: --only-failed [options]
 
-        Options: [ specific_defect_type | comma_sparated_list_of defect_types ]
+        Options: [ specific_defect_type | comma_separated_list_of defect_types ]
 
         Defect_types:
             Collect failed tests marked with defect types: {[*ReportPortal.defect_types.keys()]}
@@ -117,7 +117,7 @@ def pytest_collection_modifyitems(items, config):
         return
     rp = ReportPortal()
     version = settings.server.version
-    sat_version = f'{version.base_version}.{version.epoch}'
+    sat_version = version.base_version
     LOGGER.info(f'Fetching Report Portal launches for target Satellite version: {sat_version}')
     launch = next(iter(rp.launches(sat_version=sat_version).values()))
     _validate_launch(launch, sat_version)
