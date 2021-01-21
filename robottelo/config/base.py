@@ -8,11 +8,7 @@ from configparser import NoSectionError
 from urllib.parse import urljoin
 from urllib.parse import urlunsplit
 
-import airgun.settings
 import yaml
-from nailgun import entities
-from nailgun import entity_mixins
-from nailgun.config import ServerConfig
 
 from robottelo.config import casts
 from robottelo.constants import AZURERM_VALID_REGIONS
@@ -1486,9 +1482,6 @@ class Settings:
 
         self._configure_logging()
         self._configure_third_party_logging()
-        self._configure_entities()
-        self._configure_airgun()
-        self._configured = True
 
     def _read_robottelo_settings(self):
         """Read Robottelo's general settings."""
@@ -1588,63 +1581,6 @@ class Settings:
                 name for name, value in vars(self).items() if isinstance(value, FeatureSettings)
             ]
         return self._all_features
-
-    def _configure_entities(self):
-        """Configure NailGun's entity classes.
-
-        Do the following:
-
-        * Set ``entity_mixins.CREATE_MISSING`` to ``True``. This causes method
-            ``EntityCreateMixin.create_raw`` to generate values for empty and
-            required fields.
-        * Set ``nailgun.entity_mixins.DEFAULT_SERVER_CONFIG`` to whatever is
-            returned by :meth:`robottelo.helpers.get_nailgun_config`. See
-            ``robottelo.entity_mixins.Entity`` for more information on the effects
-            of this.
-        * Set a default value for ``nailgun.entities.GPGKey.content``.
-        """
-        entity_mixins.CREATE_MISSING = True
-        entity_mixins.DEFAULT_SERVER_CONFIG = ServerConfig(
-            self.server.get_url(), self.server.get_credentials(), verify=False
-        )
-
-        gpgkey_init = entities.GPGKey.__init__
-
-        def patched_gpgkey_init(self, server_config=None, **kwargs):
-            """Set a default value on the ``content`` field."""
-            gpgkey_init(self, server_config, **kwargs)
-            self._fields['content'].default = os.path.join(
-                get_project_root(), 'tests', 'foreman', 'data', 'valid_gpg_key.txt'
-            )
-
-        entities.GPGKey.__init__ = patched_gpgkey_init
-
-    def _configure_airgun(self):
-        """Pass required settings to AirGun"""
-        airgun.settings.configure(
-            {
-                'airgun': {
-                    'verbosity': logging.getLevelName(self.verbosity),
-                    'tmp_dir': self.tmp_dir,
-                },
-                'satellite': {
-                    'hostname': self.server.hostname,
-                    'password': self.server.admin_password,
-                    'username': self.server.admin_username,
-                },
-                'selenium': {
-                    'browser': self.browser,
-                    'saucelabs_key': self.saucelabs_key,
-                    'saucelabs_user': self.saucelabs_user,
-                    'screenshots_path': self.screenshots_path,
-                    'webdriver': self.webdriver,
-                    'webdriver_binary': self.webdriver_binary,
-                    'command_executor': self.command_executor,
-                    'browseroptions': self.browseroptions,
-                },
-                'webdriver_desired_capabilities': (self.webdriver_desired_capabilities or {}),
-            }
-        )
 
     def _configure_logging(self):
         """Configure logging for the entire framework.

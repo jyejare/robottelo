@@ -4,6 +4,10 @@ from functools import reduce
 from urllib.parse import urljoin
 from urllib.parse import urlunsplit
 
+import airgun.settings
+from nailgun import entities
+from nailgun import entity_mixins
+from nailgun.config import ServerConfig
 from wrapt import CallableObjectProxy
 
 from robottelo.config.base import get_project_root
@@ -117,6 +121,65 @@ class SettingsNodeWrapper(CallableObjectProxy):
             self._self_full_path,
             type(self.__wrapped__).__name__,
             self.__wrapped__,
+        )
+
+    def configure_nailgun(self):
+        """Configure NailGun's entity classes.
+
+        Do the following:
+
+        * Set ``entity_mixins.CREATE_MISSING`` to ``True``. This causes method
+            ``EntityCreateMixin.create_raw`` to generate values for empty and
+            required fields.
+        * Set ``nailgun.entity_mixins.DEFAULT_SERVER_CONFIG`` to whatever is
+            returned by :meth:`robottelo.helpers.get_nailgun_config`. See
+            ``robottelo.entity_mixins.Entity`` for more information on the effects
+            of this.
+        * Set a default value for ``nailgun.entities.GPGKey.content``.
+        """
+        entity_mixins.CREATE_MISSING = True
+        entity_mixins.DEFAULT_SERVER_CONFIG = ServerConfig(
+            self.server.get_url(), self.server.get_credentials(), verify=False
+        )
+
+        gpgkey_init = entities.GPGKey.__init__
+
+        def patched_gpgkey_init(self, server_config=None, **kwargs):
+            """Set a default value on the ``content`` field."""
+            gpgkey_init(self, server_config, **kwargs)
+            self._fields['content'].default = os.path.join(
+                get_project_root(), 'tests', 'foreman', 'data', 'valid_gpg_key.txt'
+            )
+
+        entities.GPGKey.__init__ = patched_gpgkey_init
+
+    def configure_airgun(self):
+        """Pass required settings to AirGun"""
+        verbosity = (
+            logging.getLevelName(self.verbosity)
+            if isinstance(self.verbosity, int)
+            else str(self.verbosity).upper()
+        )
+        airgun.settings.configure(
+            {
+                'airgun': {
+                    'verbosity': verbosity,
+                    'tmp_dir': self.tmp_dir,
+                },
+                'satellite': {
+                    'hostname': self.server.hostname,
+                    'password': self.server.admin_password,
+                    'username': self.server.admin_username,
+                },
+                'selenium': {
+                    'browser': self.browser,
+                    'screenshots_path': self.screenshots_path,
+                    'webdriver': self.webdriver,
+                    'webdriver_binary': self.webdriver_binary,
+                    'command_executor': self.command_executor,
+                },
+                'webdriver_desired_capabilities': (self.webdriver_desired_capabilities or {}),
+            }
         )
 
 
@@ -284,6 +347,21 @@ class SettingsFacade:
         self._add_to_cache(key, value)
         return value
 
+    def _dispatch_robottelo_value(self, key):
+        robottelo_keys = [setting.lower() for setting in self._configs[0].robottelo.keys()]
+        top_key = key.split('.')[0]
+        if top_key in robottelo_keys:
+            try:
+                # From DynaConf
+                value = self.get(f'robottelo.{key}')
+            except KeyError:
+                # From Legacy Setting
+                value = self.get(key)
+        else:
+            raise KeyError()
+        self._add_to_cache(key, value)
+        return value
+
     def _get_from_configs(self, key):
         for config_provider in self._configs:
             try:
@@ -309,6 +387,11 @@ class SettingsFacade:
 
         try:
             return self._dispatch_computed_value(full_path)
+        except KeyError:
+            pass
+
+        try:
+            return self._dispatch_robottelo_value(full_path)
         except KeyError:
             pass
 
