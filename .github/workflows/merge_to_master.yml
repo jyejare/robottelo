@@ -29,7 +29,8 @@ jobs:
 
       - name: Install Dependencies
         run: |
-          sudo apt-get install -y libgnutls28-dev libcurl4-openssl-dev libssl-dev
+          sudo apt update
+          sudo apt-get install -y libgnutls28-dev libcurl4-openssl-dev libssl-dev python3-dev gcc libxml2-dev
           wget https://raw.githubusercontent.com/SatelliteQE/broker/master/broker_settings.yaml.example
           # link vs compile time ssl implementations can break the environment when installing requirements
           # Uninstall pycurl - its likely not installed, but in case the ubuntu-latest packages change
