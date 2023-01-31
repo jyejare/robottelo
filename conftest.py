@@ -1,5 +1,7 @@
 """Global Configurations for py.test runner"""
 import pytest
+import subprocess
+import sys
 
 pytest_plugins = [
     # Plugins
@@ -57,6 +59,11 @@ pytest_plugins = [
     'pytest_fixtures.component.templatesync',
     'pytest_fixtures.component.user_role',
 ]
+
+
+@pytest.fixture(scope="session", autouse=True)
+def update_requirements():
+    subprocess.check_call([sys.executable, "-m", "pip", "install", "-r", "requirements.txt", "--upgrade"])
 
 
 @pytest.hookimpl(tryfirst=True, hookwrapper=True)
