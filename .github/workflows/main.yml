@@ -28,4 +28,4 @@ jobs:
       - name: create a new release from the tag
         env:
           credentials: ${{ secrets.GH_TOKEN }}
-        run: "curl -L -X POST -H \"Authorization: Bearer ${{ secrets.SATQE_GH_TOKEN }}\" ${GITHUB_API_URL}/repos/${GITHUB_REPOSITORY}/releases -d '{\"tag_name\": \"${{ github.event.inputs.tag_name }}\", \"target_commitish\":\"master\", \"name\":\"${tag}\", \"draft\":false, \"prerelease\":true, \"generate_release_notes\": true}'"
+        run: "curl -L -X POST -H \"Authorization: Bearer ${{ secrets.SATQE_GH_TOKEN }}\" ${GITHUB_API_URL}/repos/${GITHUB_REPOSITORY}/releases -d '{\"tag_name\": \"${{ github.event.inputs.tag_name }}\", \"target_commitish\":\"master\", \"name\":\"${{ github.event.inputs.tag_name }}\", \"draft\":false, \"prerelease\":true, \"generate_release_notes\": true}'"
