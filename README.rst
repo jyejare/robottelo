@@ -28,6 +28,7 @@ driven`_. There are three types of tests:
 * CLI tests, which rely on `ssh2-python`_.
 * API tests, which rely on `Requests`_ through `nailgun`_.
 
+
 The `full documentation
 <http://robottelo.readthedocs.org/en/latest/index.html>`_ is available on
 ReadTheDocs. It can also be generated locally::
