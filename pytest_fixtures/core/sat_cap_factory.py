@@ -39,11 +39,17 @@ def _target_satellite_host(request, satellite_factory):
 
 @contextmanager
 def _target_capsule_host(request, capsule_factory):
-    if 'sanity' not in request.config.option.markexpr:
+    if 'sanity' not in request.config.option.markexpr and not request.config.option.n_minus:
         new_cap = capsule_factory()
         yield new_cap
         new_cap.teardown()
         Broker(hosts=[new_cap]).checkin()
+    elif request.config.option.n_minus:
+        if not settings.capsule.hostname:
+            hosts = Capsule.get_hosts_from_inventory(filter="'cap' in @inv.name")
+            settings.capsule.hostname = hosts[0].hostname
+        caps = Capsule(hostname=settings.capsule.hostname)
+        yield caps
     else:
         yield
 
@@ -148,9 +154,10 @@ def session_capsule_host(request, capsule_factory):
 
 
 @pytest.fixture
-def capsule_configured(capsule_host, target_sat):
+def capsule_configured(request, capsule_host, target_sat):
     """Configure the capsule instance with the satellite from settings.server.hostname"""
-    capsule_host.capsule_setup(sat_host=target_sat)
+    if not request.config.option.n_minus:
+        capsule_host.capsule_setup(sat_host=target_sat)
     return capsule_host
 
 
@@ -162,16 +169,18 @@ def large_capsule_configured(large_capsule_host, target_sat):
 
 
 @pytest.fixture(scope='module')
-def module_capsule_configured(module_capsule_host, module_target_sat):
+def module_capsule_configured(request, module_capsule_host, module_target_sat):
     """Configure the capsule instance with the satellite from settings.server.hostname"""
-    module_capsule_host.capsule_setup(sat_host=module_target_sat)
+    if not request.config.option.n_minus:
+        module_capsule_host.capsule_setup(sat_host=module_target_sat)
     return module_capsule_host
 
 
 @pytest.fixture(scope='session')
-def session_capsule_configured(session_capsule_host, session_target_sat):
+def session_capsule_configured(request, session_capsule_host, session_target_sat):
     """Configure the capsule instance with the satellite from settings.server.hostname"""
-    session_capsule_host.capsule_setup(sat_host=session_target_sat)
+    if not request.config.option.n_minus:
+        session_capsule_host.capsule_setup(sat_host=session_target_sat)
     return session_capsule_host
 
 
