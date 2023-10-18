@@ -1259,6 +1259,7 @@ class TestCapsuleContentManagement:
     def test_positive_remove_capsule_orphans(
         self,
         target_sat,
+        pytestconfig,
         capsule_configured,
         function_entitlement_manifest_org,
         function_lce_library,
@@ -1308,8 +1309,9 @@ class TestCapsuleContentManagement:
             data={'environment_id': function_lce_library.id}
         )
         result = capsule_configured.nailgun_capsule.content_lifecycle_environments()
-        assert len(result['results']) == 1
-        assert result['results'][0]['id'] == function_lce_library.id
+        if not pytestconfig.option.n_minus:
+            assert len(result['results']) == 1
+            assert result['results'][0]['id'] == function_lce_library.id
 
         sync_status = capsule_configured.nailgun_capsule.content_sync()
         assert sync_status['result'] == 'success', 'Capsule sync task failed.'

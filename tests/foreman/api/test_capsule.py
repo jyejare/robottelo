@@ -21,7 +21,7 @@ from robottelo.config import user_nailgun_config
 @pytest.mark.e2e
 @pytest.mark.upgrade
 @pytest.mark.tier1
-def test_positive_update_capsule(target_sat, module_capsule_configured):
+def test_positive_update_capsule(request, pytestconfig, target_sat, module_capsule_configured):
     """Update various capsule properties
 
     :id: a3d3eaa9-ed8d-42e6-9c83-20251e5ca9af
@@ -39,7 +39,7 @@ def test_positive_update_capsule(target_sat, module_capsule_configured):
 
     :customerscenario: true
     """
-    new_name = f'{gen_string("alpha")}-{module_capsule_configured.name}'
+    new_name = f'{gen_string("alpha")}-{module_capsule_configured.hostname}'
     capsule = target_sat.api.SmartProxy().search(
         query={'search': f'name = {module_capsule_configured.hostname}'}
     )[0]
@@ -73,6 +73,16 @@ def test_positive_update_capsule(target_sat, module_capsule_configured):
     assert len(capsules) > 0
     assert capsule.url in [cps.url for cps in capsules]
     assert capsule.name in [cps.name for cps in capsules]
+
+    @request.addfinalizer
+    def _finalize():
+        if pytestconfig.option.n_minus:
+            cap = target_sat.api.SmartProxy().search(query={'search': f'name = {new_name}'})
+            # Reinitializing the hostname
+            if cap:
+                cap = cap[0]
+                cap.name = module_capsule_configured.hostname
+                cap.update(['name'])
 
 
 @pytest.mark.skip_if_not_set('fake_capsules')

@@ -15,6 +15,7 @@ PYTEST_XDIST_OPTS=$(PYTEST_OPTS) -n $(PYTEST_XDIST_NUMPROCESSES)
 ROBOTTELO_TESTS_PATH=tests/robottelo/
 TESTIMONY_OPTIONS=--config testimony.yaml
 
+
 # Commands --------------------------------------------------------------------
 
 help:
