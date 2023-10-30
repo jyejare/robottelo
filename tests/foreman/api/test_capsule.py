@@ -26,7 +26,7 @@ from robottelo.config import user_nailgun_config
 @pytest.mark.e2e
 @pytest.mark.upgrade
 @pytest.mark.tier1
-def test_positive_update_capsule(target_sat, module_capsule_configured):
+def test_positive_update_capsule(pytestconfig, target_sat, module_capsule_configured):
     """Update various capsule properties
 
     :id: a3d3eaa9-ed8d-42e6-9c83-20251e5ca9af
@@ -45,40 +45,51 @@ def test_positive_update_capsule(target_sat, module_capsule_configured):
     :customerscenario: true
 
     """
-    new_name = f'{gen_string("alpha")}-{module_capsule_configured.name}'
-    capsule = target_sat.api.SmartProxy().search(
-        query={'search': f'name = {module_capsule_configured.hostname}'}
-    )[0]
+    new_name = f'{gen_string("alpha")}-{module_capsule_configured.hostname}'
+    try:
+        capsule = target_sat.api.SmartProxy().search(
+            query={'search': f'name = {module_capsule_configured.hostname}'}
+        )[0]
 
-    # refresh features
-    features = capsule.refresh()
-    module_capsule_configured.run_installer_arg('enable-foreman-proxy-plugin-openscap')
-    features_new = capsule.refresh()
-    assert len(features_new["features"]) == len(features["features"]) + 1
-    assert 'Openscap' in [feature["name"] for feature in features_new["features"]]
+        # refresh features
+        features = capsule.refresh()
+        module_capsule_configured.run_installer_arg('enable-foreman-proxy-plugin-openscap')
+        features_new = capsule.refresh()
+        assert len(features_new["features"]) == len(features["features"]) + 1
+        assert 'Openscap' in [feature["name"] for feature in features_new["features"]]
 
-    # update organizations
-    organizations = [target_sat.api.Organization().create() for _ in range(2)]
-    capsule.organization = organizations
-    capsule = capsule.update(['organization'])
-    assert {org.id for org in capsule.organization} == {org.id for org in organizations}
+        # update organizations
+        organizations = [target_sat.api.Organization().create() for _ in range(2)]
+        capsule.organization = organizations
+        capsule = capsule.update(['organization'])
+        assert {org.id for org in capsule.organization} == {org.id for org in organizations}
 
-    # update locations
-    locations = [target_sat.api.Location().create() for _ in range(2)]
-    capsule.location = locations
-    capsule = capsule.update(['location'])
-    assert {loc.id for loc in capsule.organization} == {loc.id for loc in organizations}
+        # update locations
+        locations = [target_sat.api.Location().create() for _ in range(2)]
+        capsule.location = locations
+        capsule = capsule.update(['location'])
+        assert {loc.id for loc in capsule.organization} == {loc.id for loc in organizations}
 
-    # update name
-    capsule.name = new_name
-    capsule = capsule.update(['name'])
-    assert capsule.name == new_name
+        # update name
+        capsule.name = new_name
+        capsule = capsule.update(['name'])
+        assert capsule.name == new_name
 
-    # serching for non-default capsule BZ#2077824
-    capsules = target_sat.api.SmartProxy().search(query={'search': 'id != 1'})
-    assert len(capsules) > 0
-    assert capsule.url in [cps.url for cps in capsules]
-    assert capsule.name in [cps.name for cps in capsules]
+        # serching for non-default capsule BZ#2077824
+        capsules = target_sat.api.SmartProxy().search(query={'search': 'id != 1'})
+        assert len(capsules) > 0
+        assert capsule.url in [cps.url for cps in capsules]
+        assert capsule.name in [cps.name for cps in capsules]
+    finally:
+        if pytestconfig.option.n_minus:
+            capsule = target_sat.api.SmartProxy().search(
+                query={'search': f'name = {new_name}'}
+            )
+            # Reinitializing the hostname
+            if capsule:
+                capsule =capsule[0]
+                capsule.name = module_capsule_configured.hostname
+                capsule = capsule.update(['name'])
 
 
 @pytest.mark.skip_if_not_set('fake_capsules')
