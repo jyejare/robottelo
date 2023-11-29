@@ -82,12 +82,10 @@ def test_positive_update_capsule(pytestconfig, target_sat, module_capsule_config
         assert capsule.name in [cps.name for cps in capsules]
     finally:
         if pytestconfig.option.n_minus:
-            capsule = target_sat.api.SmartProxy().search(
-                query={'search': f'name = {new_name}'}
-            )
+            capsule = target_sat.api.SmartProxy().search(query={'search': f'name = {new_name}'})
             # Reinitializing the hostname
             if capsule:
-                capsule =capsule[0]
+                capsule = capsule[0]
                 capsule.name = module_capsule_configured.hostname
                 capsule = capsule.update(['name'])
 

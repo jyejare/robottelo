@@ -3,6 +3,7 @@
 # Adjust capsule host and capsule_configured host behavior for n_minus testing
 # Calculate capsule hostname from inventory just as we do in xDist.py
 
+
 def pytest_addoption(parser):
     """Add options for pytest to collect tests based on fixtures its using"""
     help_text = '''
@@ -12,9 +13,7 @@ def pytest_addoption(parser):
 
         example: pytest --n-minus tests/foreman
     '''
-    parser.addoption(
-        "--n-minus", action='store_true', default=False,
-        help=help_text)
+    parser.addoption("--n-minus", action='store_true', default=False, help=help_text)
 
 
 def pytest_collection_modifyitems(items, config):

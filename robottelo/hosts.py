@@ -1654,6 +1654,10 @@ class Capsule(ContentHost, CapsuleMixins):
                 f'A core service is not running at capsule host\n{result.stdout}'
             )
 
+    @lru_cache
+    def cached_capsule_setup(self, sat_host):
+        self.capsule_setup(sat_host=sat_host)
+
     def set_rex_script_mode_provider(self, mode='ssh'):
         """Set provider for remote execution script mode. One of: ssh(default),
         pull-mqtt, ssh-async"""
