@@ -16,7 +16,7 @@ jobs:
 
   # Pre-Requisites for Auto Cherrypicking
   find-the-parent-prt-comment:
-    if: github.event.pull_request.merged == true && contains(github.event.pull_request.labels.*.name, 'CherryPick')
+    if: github.event.pull_request.merged == true && github.event.pull_request.closed == true && contains(github.event.pull_request.labels.*.name, 'CherryPick')
     name: Find & Save last PRT comment of Parent PR
     runs-on: ubuntu-latest
     outputs:
@@ -32,7 +32,7 @@ jobs:
 
   # Auto CherryPicking and Failure Recording
   auto-cherry-pick:
-    if: github.event.pull_request.merged == true && contains(github.event.pull_request.labels.*.name, 'CherryPick')
+    if: github.event.pull_request.merged == true && github.event.pull_request.closed == true && contains(github.event.pull_request.labels.*.name, 'CherryPick')
     name: Auto Cherry Pick to labeled branches
     needs: find-the-parent-prt-comment
     runs-on: ubuntu-latest
