@@ -11,6 +11,7 @@
 :CaseImportance: High
 
 """
+
 from random import choice
 import re
 
@@ -31,17 +32,14 @@ from robottelo.constants import (
     PRDS,
     REPOS,
     REPOSET,
-    SM_OVERALL_STATUS,
 )
 from robottelo.exceptions import CLIFactoryError, CLIReturnCodeError
-from robottelo.hosts import ContentHostError
 from robottelo.logging import logger
 from robottelo.utils.datafactory import (
     invalid_values_list,
     valid_data_list,
     valid_hosts_list,
 )
-from robottelo.utils.issue_handlers import is_open
 
 
 @pytest.fixture(scope="module")
@@ -81,10 +79,10 @@ def function_user(target_sat, function_host):
     user_name = gen_string('alphanumeric')
     user_password = gen_string('alphanumeric')
     org = target_sat.api.Organization().search(
-        query={'search': f'name="{function_host["organization"]}"'}
+        query={'search': f'name="{function_host["organization"]["name"]}"'}
     )[0]
     location = target_sat.api.Location().search(
-        query={'search': f'name="{function_host["location"]}"'}
+        query={'search': f'name="{function_host["location"]["name"]}"'}
     )[0]
     user = target_sat.api.User(
         admin=False,
@@ -286,6 +284,54 @@ def test_positive_search_all_field_sets(module_target_sat):
         assert field in list(output_field_sets[host_idx].keys())
 
 
+@pytest.mark.rhel_ver_match('8')
+@pytest.mark.cli_host_subscription
+@pytest.mark.tier3
+def test_positive_host_list_with_cv_and_lce(
+    target_sat,
+    rhel_contenthost,
+    function_ak_with_cv,
+    function_promoted_cv,
+    function_org,
+    function_lce,
+):
+    """The output from hammer host list correctly includes both Content View and
+    Lifecycle Environment fields. Specifying these fields explicitly in the command
+    also yields the correct output.
+
+    :id: 3ece2a52-0b91-453e-a4ea-c0376d79fd2d
+
+    :steps:
+        1. Register a Host
+        2. Run the hammer host list command
+        3. Verify information is correct and that both CV and LCE are in the output
+        4. Run the hammer list command with CV and LCE fields specified
+        5. Verify information is correct and that both CV and LCE are in the output
+
+    :expectedresults: Both cases should return CV and LCE in the output
+
+    :Verifies: SAT-23576, SAT-22677
+
+    :customerscenario: true
+    """
+    # register client
+    result = rhel_contenthost.register(function_org, None, function_ak_with_cv.name, target_sat)
+    assert result.status == 0
+    assert rhel_contenthost.subscribed
+    # list host command without specifying cv or lce
+    host_list = target_sat.cli.Host.list(output_format='json')
+    host = next(i for i in host_list if i['name'] == rhel_contenthost.hostname)
+    assert host['content-view'] == function_promoted_cv.name
+    assert host['lifecycle-environment'] == function_lce.name
+    # list host command with specifying cv and lce
+    host_list_fields = target_sat.cli.Host.list(
+        options={'fields': ['Name', 'Content view', 'Lifecycle environment']}, output_format='json'
+    )
+    host = next(i for i in host_list_fields if i['name'] == rhel_contenthost.hostname)
+    assert host['content-view'] == function_promoted_cv.name
+    assert host['lifecycle-environment'] == function_lce.name
+
+
 # -------------------------- CREATE SCENARIOS -------------------------
 @pytest.mark.e2e
 @pytest.mark.cli_host_create
@@ -359,29 +405,31 @@ def test_positive_crud_interface_by_id(target_sat, default_location, default_org
 
     mac = gen_mac(multicast=False)
     host = target_sat.cli_factory.make_fake_host({'domain-id': domain.id})
-    number_of_interfaces = len(target_sat.cliHostInterface.list({'host-id': host['id']}))
+    number_of_interfaces = len(target_sat.cli.HostInterface.list({'host-id': host['id']}))
 
-    target_sat.cliHostInterface.create(
+    target_sat.cli.HostInterface.create(
         {'host-id': host['id'], 'domain-id': domain.id, 'mac': mac, 'type': 'interface'}
     )
     host = target_sat.cli.Host.info({'id': host['id']})
-    host_interface = target_sat.cliHostInterface.info(
+    host_interface = target_sat.cli.HostInterface.info(
         {
             'host-id': host['id'],
-            'id': [ni for ni in host['network-interfaces'] if ni['mac-address'] == mac][0]['id'],
+            'id': [ni for ni in host['network-interfaces'].values() if ni['mac-address'] == mac][0][
+                'id'
+            ],
         }
     )
     assert host_interface['domain'] == domain.name
     assert host_interface['mac-address'] == mac
     assert (
-        len(target_sat.cliHostInterface.list({'host-id': host['id']})) == number_of_interfaces + 1
+        len(target_sat.cli.HostInterface.list({'host-id': host['id']})) == number_of_interfaces + 1
     )
 
     new_domain = target_sat.api.Domain(
         location=[default_location], organization=[default_org]
     ).create()
     new_mac = gen_mac(multicast=False)
-    target_sat.cliHostInterface.update(
+    target_sat.cli.HostInterface.update(
         {
             'host-id': host['id'],
             'id': host_interface['id'],
@@ -389,19 +437,21 @@ def test_positive_crud_interface_by_id(target_sat, default_location, default_org
             'mac': new_mac,
         }
     )
-    host_interface = target_sat.cliHostInterface.info(
+    host_interface = target_sat.cli.HostInterface.info(
         {
             'host-id': host['id'],
-            'id': [ni for ni in host['network-interfaces'] if ni['mac-address'] == mac][0]['id'],
+            'id': [ni for ni in host['network-interfaces'].values() if ni['mac-address'] == mac][0][
+                'id'
+            ],
         }
     )
     assert host_interface['domain'] == new_domain.name
     assert host_interface['mac-address'] == new_mac
 
-    target_sat.cliHostInterface.delete({'host-id': host['id'], 'id': host_interface['id']})
-    assert len(target_sat.cliHostInterface.list({'host-id': host['id']})) == number_of_interfaces
+    target_sat.cli.HostInterface.delete({'host-id': host['id'], 'id': host_interface['id']})
+    assert len(target_sat.cli.HostInterface.list({'host-id': host['id']})) == number_of_interfaces
     with pytest.raises(CLIReturnCodeError):
-        target_sat.cliHostInterface.info({'host-id': host['id'], 'id': host_interface['id']})
+        target_sat.cli.HostInterface.info({'host-id': host['id'], 'id': host_interface['id']})
 
 
 @pytest.mark.cli_host_create
@@ -598,7 +648,8 @@ def test_positive_list_and_unregister(
 
     :parametrized: yes
     """
-    rhel7_contenthost.register(module_org, None, module_ak_with_cv.name, target_sat)
+    result = rhel7_contenthost.register(module_org, None, module_ak_with_cv.name, target_sat)
+    assert result.status == 0
     assert rhel7_contenthost.subscribed
     hosts = target_sat.cli.Host.list({'organization-id': module_org.id})
     assert rhel7_contenthost.hostname in [host['name'] for host in hosts]
@@ -611,7 +662,7 @@ def test_positive_list_and_unregister(
 @pytest.mark.cli_host_create
 @pytest.mark.tier3
 def test_positive_list_by_last_checkin(
-    module_lce, module_org, module_promoted_cv, rhel7_contenthost, target_sat
+    module_org, rhel7_contenthost, target_sat, module_ak_with_cv
 ):
     """List all content hosts using last checkin criteria
 
@@ -625,11 +676,8 @@ def test_positive_list_by_last_checkin(
 
     :parametrized: yes
     """
-    rhel7_contenthost.install_katello_ca(target_sat)
-    rhel7_contenthost.register_contenthost(
-        module_org.label,
-        lce=f'{module_lce.label}/{module_promoted_cv.label}',
-    )
+    result = rhel7_contenthost.register(module_org, None, module_ak_with_cv.name, target_sat)
+    assert result.status == 0, f'Failed to register host: {result.stderr}'
     assert rhel7_contenthost.subscribed
     hosts = target_sat.cli.Host.list(
         {'search': 'last_checkin = "Today" or last_checkin = "Yesterday"'}
@@ -641,7 +689,7 @@ def test_positive_list_by_last_checkin(
 @pytest.mark.cli_host_create
 @pytest.mark.tier3
 def test_positive_list_infrastructure_hosts(
-    module_lce, module_org, module_promoted_cv, rhel7_contenthost, target_sat
+    module_org, rhel7_contenthost, target_sat, module_ak_with_cv
 ):
     """List infrasturcture hosts (Satellite and Capsule)
 
@@ -651,23 +699,20 @@ def test_positive_list_infrastructure_hosts(
 
     :parametrized: yes
     """
-    rhel7_contenthost.install_katello_ca(target_sat)
-    rhel7_contenthost.register_contenthost(
-        module_org.label,
-        lce=f'{module_lce.label}/{module_promoted_cv.label}',
-    )
+    result = rhel7_contenthost.register(module_org, None, module_ak_with_cv.name, target_sat)
+    assert result.status == 0
     assert rhel7_contenthost.subscribed
     target_sat.cli.Host.update({'name': target_sat.hostname, 'new-organization-id': module_org.id})
     # list satellite hosts
     hosts = target_sat.cli.Host.list({'search': 'infrastructure_facet.foreman=true'})
-    assert len(hosts) == 2 if is_open('BZ:1994685') else len(hosts) == 1
+    assert len(hosts) == 2
     hostnames = [host['name'] for host in hosts]
     assert rhel7_contenthost.hostname not in hostnames
     assert target_sat.hostname in hostnames
     # list capsule hosts
     hosts = target_sat.cli.Host.list({'search': 'infrastructure_facet.smart_proxy_id=1'})
     hostnames = [host['name'] for host in hosts]
-    assert len(hosts) == 2 if is_open('BZ:1994685') else len(hosts) == 1
+    assert len(hosts) == 2
     assert rhel7_contenthost.hostname not in hostnames
     assert target_sat.hostname in hostnames
 
@@ -813,7 +858,7 @@ def test_positive_list_with_nested_hostgroup(target_sat):
     logger.info(f'Host info: {host}')
     assert host['operating-system']['medium'] == options.medium.name
     assert host['operating-system']['partition-table'] == options.ptable.name  # inherited
-    if not is_open('BZ:2215294') or not target_sat.is_stream:
+    if not target_sat.is_stream:
         assert 'id' in host['content-information']['lifecycle-environment']
         assert int(host['content-information']['lifecycle-environment']['id']) == int(lce.id)
         assert int(host['content-information']['content-view']['id']) == int(
@@ -878,10 +923,10 @@ def test_positive_update_parameters_by_name(
     new_mac = gen_mac(multicast=False)
     new_loc = module_location
     organization = target_sat.api.Organization().search(
-        query={'search': f'name="{function_host["organization"]}"'}
+        query={'search': f'name="{function_host["organization"]["name"]}"'}
     )[0]
     new_domain = target_sat.api.Domain(location=[new_loc], organization=[organization]).create()
-    p_table_name = function_host['operating-system']['partition-table']
+    p_table_name = function_host['operating-system']['partition-table']['name']
     p_table = target_sat.api.PartitionTable().search(query={'search': f'name="{p_table_name}"'})
     new_os = target_sat.api.OperatingSystem(
         major=gen_integer(0, 10),
@@ -908,13 +953,13 @@ def test_positive_update_parameters_by_name(
         }
     )
     host = target_sat.cli.Host.info({'id': function_host['id']})
-    assert '{}.{}'.format(new_name, host['network']['domain']) == host['name']
-    assert host['location'] == new_loc.name
+    assert '{}.{}'.format(new_name, host['network']['domain']['name']) == host['name']
+    assert host['location']['name'] == new_loc.name
     assert host['network']['mac'] == new_mac
-    assert host['network']['domain'] == new_domain.name
-    assert host['operating-system']['architecture'] == module_architecture.name
-    assert host['operating-system']['operating-system'] == new_os.title
-    assert host['operating-system']['medium'] == new_medium.name
+    assert host['network']['domain']['name'] == new_domain.name
+    assert host['operating-system']['architecture']['name'] == module_architecture.name
+    assert host['operating-system']['operating-system']['name'] == new_os.title
+    assert host['operating-system']['medium']['name'] == new_medium.name
 
 
 @pytest.mark.tier1
@@ -981,8 +1026,8 @@ def test_negative_update_os(target_sat, function_host, module_architecture):
 
     :expectedresults: A host is not updated
     """
-    p_table = function_host['operating-system']['partition-table']
-    p_table = target_sat.api.PartitionTable().search(query={'search': f'name="{p_table}"'})[0]
+    p_table_name = function_host['operating-system']['partition-table']['name']
+    p_table = target_sat.api.PartitionTable().search(query={'search': f'name="{p_table_name}"'})[0]
     new_os = target_sat.api.OperatingSystem(
         major=gen_integer(0, 10),
         name=gen_string('alphanumeric'),
@@ -1034,8 +1079,8 @@ def test_hammer_host_info_output(target_sat, module_user):
     target_sat.cli.User.update(
         {
             'id': module_user.id,
-            'organizations': [host['organization']],
-            'locations': [host['location']],
+            'organizations': [host['organization']['name']],
+            'locations': [host['location']['name']],
         }
     )
     target_sat.cli.Host.update({'owner-id': module_user.id, 'id': '1'})
@@ -1061,18 +1106,17 @@ def test_positive_parameter_crud(function_host, target_sat):
         {'host-id': function_host['id'], 'name': name, 'value': value}
     )
     host = target_sat.cli.Host.info({'id': function_host['id']})
-    assert name in host['parameters']
-    assert value == host['parameters'][name]
+    assert (name, value) in [(param['name'], param['value']) for param in host['parameters']]
 
     new_value = valid_data_list()[name]
     target_sat.cli.Host.set_parameter({'host-id': host['id'], 'name': name, 'value': new_value})
     host = target_sat.cli.Host.info({'id': host['id']})
-    assert name in host['parameters']
-    assert new_value == host['parameters'][name]
+
+    assert (name, new_value) in [(param['name'], param['value']) for param in host['parameters']]
 
     target_sat.cli.Host.delete_parameter({'host-id': host['id'], 'name': name})
     host = target_sat.cli.Host.info({'id': host['id']})
-    assert name not in host['parameters']
+    assert name not in [param['name'] for param in host['parameters']]
 
 
 # -------------------------- HOST PARAMETER SCENARIOS -------------------------
@@ -1129,7 +1173,9 @@ def test_negative_view_parameter_by_non_admin_user(target_sat, function_host, fu
         {'host-id': function_host['id'], 'name': param_name, 'value': param_value}
     )
     host = target_sat.cli.Host.info({'id': function_host['id']})
-    assert host['parameters'][param_name] == param_value
+    assert (param_name, param_value) in [
+        (param['name'], param['value']) for param in host['parameters']
+    ]
     role = target_sat.api.Role(name=gen_string('alphanumeric')).create()
     target_sat.cli_factory.add_role_permissions(
         role.id,
@@ -1174,7 +1220,9 @@ def test_positive_view_parameter_by_non_admin_user(target_sat, function_host, fu
         {'host-id': function_host['id'], 'name': param_name, 'value': param_value}
     )
     host = target_sat.cli.Host.info({'id': function_host['id']})
-    assert host['parameters'][param_name] == param_value
+    assert (param_name, param_value) in [
+        (param['name'], param['value']) for param in host['parameters']
+    ]
     role = target_sat.api.Role(name=gen_string('alphanumeric')).create()
     target_sat.cli_factory.add_role_permissions(
         role.id,
@@ -1188,8 +1236,9 @@ def test_positive_view_parameter_by_non_admin_user(target_sat, function_host, fu
     host = target_sat.cli.Host.with_user(
         username=function_user['user'].login, password=function_user['password']
     ).info({'id': host['id']})
-    assert param_name in host['parameters']
-    assert host['parameters'][param_name] == param_value
+    assert (param_name, param_value) in [
+        (param['name'], param['value']) for param in host['parameters']
+    ]
 
 
 @pytest.mark.cli_host_parameter
@@ -1221,7 +1270,9 @@ def test_negative_edit_parameter_by_non_admin_user(target_sat, function_host, fu
         {'host-id': function_host['id'], 'name': param_name, 'value': param_value}
     )
     host = target_sat.cli.Host.info({'id': function_host['id']})
-    assert host['parameters'][param_name] == param_value
+    assert (param_name, param_value) in [
+        (param['name'], param['value']) for param in host['parameters']
+    ]
     role = target_sat.api.Role(name=gen_string('alphanumeric')).create()
     target_sat.cli_factory.add_role_permissions(
         role.id,
@@ -1240,7 +1291,9 @@ def test_negative_edit_parameter_by_non_admin_user(target_sat, function_host, fu
             {'host-id': function_host['id'], 'name': param_name, 'value': param_new_value}
         )
     host = target_sat.cli.Host.info({'id': function_host['id']})
-    assert host['parameters'][param_name] == param_value
+    assert (param_name, param_value) in [
+        (param['name'], param['value']) for param in host['parameters']
+    ]
 
 
 @pytest.mark.cli_host_parameter
@@ -1481,9 +1534,6 @@ def test_positive_provision_baremetal_with_uefi_secureboot():
 def setup_custom_repo(target_sat, module_org, katello_host_tools_host, request):
     """Create custom repository content"""
 
-    sca_enabled = module_org.simple_content_access
-    module_org.sca_disable()
-
     # get package details
     details = {}
     if katello_host_tools_host.os_version.major == 6:
@@ -1511,28 +1561,13 @@ def setup_custom_repo(target_sat, module_org, katello_host_tools_host, request):
     ).create()
     custom_repo.sync()
 
-    subs = target_sat.api.Subscription(organization=module_org, name=prod.name).search()
-    assert len(subs), f'Subscription for sat client product: {prod.name} was not found.'
-    custom_sub = subs[0]
-
-    katello_host_tools_host.nailgun_host.bulk_add_subscriptions(
-        data={
-            "organization_id": module_org.id,
-            "included": {"ids": [katello_host_tools_host.nailgun_host.id]},
-            "subscriptions": [{"id": custom_sub.id, "quantity": 1}],
-        }
-    )
     # make sure repo is enabled
     katello_host_tools_host.enable_repo(
         f'{module_org.name}_{prod.name}_{custom_repo.name}', force=True
     )
     # refresh repository metadata
     katello_host_tools_host.subscription_manager_list_repos()
-    if sca_enabled:
-        yield details
-        module_org.sca_enable()
-    else:
-        return details
+    return details
 
 
 @pytest.fixture
@@ -1552,6 +1587,7 @@ def yum_security_plugin(katello_host_tools_host):
 
 @pytest.mark.e2e
 @pytest.mark.cli_katello_host_tools
+@pytest.mark.rhel_ver_match('[^6].*')
 @pytest.mark.tier3
 def test_positive_report_package_installed_removed(
     katello_host_tools_host, setup_custom_repo, target_sat
@@ -1597,6 +1633,7 @@ def test_positive_report_package_installed_removed(
 
 
 @pytest.mark.cli_katello_host_tools
+@pytest.mark.rhel_ver_match('[^6].*')
 @pytest.mark.tier3
 def test_positive_package_applicability(katello_host_tools_host, setup_custom_repo, target_sat):
     """Ensure packages applicability is functioning properly
@@ -1658,6 +1695,7 @@ def test_positive_package_applicability(katello_host_tools_host, setup_custom_re
 
 @pytest.mark.e2e
 @pytest.mark.cli_katello_host_tools
+@pytest.mark.rhel_ver_match('[^6].*')
 @pytest.mark.pit_client
 @pytest.mark.pit_server
 @pytest.mark.tier3
@@ -1727,6 +1765,7 @@ def test_positive_erratum_applicability(
 
 
 @pytest.mark.cli_katello_host_tools
+@pytest.mark.rhel_ver_match('[^6].*')
 @pytest.mark.tier3
 def test_positive_apply_security_erratum(katello_host_tools_host, setup_custom_repo, target_sat):
     """Apply security erratum to a host
@@ -1796,28 +1835,8 @@ def test_positive_install_package_via_rex(
     assert len(installed_packages) == 1
 
 
-# -------------------------- HOST SUBSCRIPTION SUBCOMMAND FIXTURES --------------------------
-@pytest.fixture
-def host_subscription_client(rhel7_contenthost, target_sat):
-    rhel7_contenthost.install_katello_ca(target_sat)
-    return rhel7_contenthost
-
-
-@pytest.fixture
-def ak_with_subscription(
-    target_sat, module_org, module_promoted_cv, module_lce, default_subscription
-):
-    activation_key = target_sat.api.ActivationKey(
-        content_view=module_promoted_cv,
-        organization=module_org,
-        environment=module_lce,
-        auto_attach=False,
-    ).create()
-    activation_key.add_subscriptions(data={'subscription_id': default_subscription.id})
-    return activation_key
-
-
 # -------------------------- HOST SUBSCRIPTION SUBCOMMAND SCENARIOS -------------------------
+@pytest.mark.rhel_ver_match('9')
 @pytest.mark.cli_host_subscription
 @pytest.mark.tier3
 def test_positive_register(
@@ -1825,7 +1844,7 @@ def test_positive_register(
     module_promoted_cv,
     module_lce,
     module_ak_with_cv,
-    host_subscription_client,
+    rhel_contenthost,
     target_sat,
 ):
     """Attempt to register a host
@@ -1839,7 +1858,7 @@ def test_positive_register(
     hosts = target_sat.cli.Host.list(
         {
             'organization-id': module_org.id,
-            'search': host_subscription_client.hostname,
+            'search': rhel_contenthost.hostname,
         }
     )
     assert len(hosts) == 0
@@ -1848,18 +1867,18 @@ def test_positive_register(
             'organization-id': module_org.id,
             'content-view-id': module_promoted_cv.id,
             'lifecycle-environment-id': module_lce.id,
-            'name': host_subscription_client.hostname,
+            'name': rhel_contenthost.hostname,
         }
     )
     hosts = target_sat.cli.Host.list(
         {
             'organization-id': module_org.id,
-            'search': host_subscription_client.hostname,
+            'search': rhel_contenthost.hostname,
         }
     )
     assert len(hosts) > 0
     host = target_sat.cli.Host.info({'id': hosts[0]['id']})
-    assert host['name'] == host_subscription_client.hostname
+    assert host['name'] == rhel_contenthost.hostname
     # note: when not registered the following command lead to exception,
     # see unregister
     host_subscriptions = target_sat.cli.ActivationKey.subscriptions(
@@ -1873,149 +1892,13 @@ def test_positive_register(
     assert len(host_subscriptions) == 0
 
 
+@pytest.mark.rhel_ver_match('9')
 @pytest.mark.cli_host_subscription
 @pytest.mark.tier3
-def test_positive_attach(
-    module_org,
-    module_promoted_cv,
-    module_lce,
-    module_ak_with_cv,
-    module_rhst_repo,
-    default_subscription,
-    host_subscription_client,
+def test_positive_without_attach_with_lce(
     target_sat,
-):
-    """Attempt to attach a subscription to host
-
-    :id: d5825bfb-59e3-4d49-8df8-902cc7a9d66b
-
-    :BZ: 1199515
-
-    :customerscenario: true
-
-    :expectedresults: host successfully subscribed, subscription repository
-        enabled, and repository package installed
-
-    :parametrized: yes
-    """
-    # create an activation key without subscriptions
-    # register the client host
-    target_sat.cli.Host.subscription_register(
-        {
-            'organization-id': module_org.id,
-            'content-view-id': module_promoted_cv.id,
-            'lifecycle-environment-id': module_lce.id,
-            'name': host_subscription_client.hostname,
-        }
-    )
-    host = target_sat.cli.Host.info({'name': host_subscription_client.hostname})
-    host_subscription_client.register_contenthost(
-        module_org.name, activation_key=module_ak_with_cv.name
-    )
-    assert host_subscription_client.subscribed
-    # attach the subscription to host
-    target_sat.cli.Host.subscription_attach(
-        {
-            'host-id': host['id'],
-            'subscription-id': default_subscription.id,
-            'quantity': 2,
-        }
-    )
-    host_subscription_client.enable_repo(module_rhst_repo)
-    # ensure that katello-host-tools can be installed
-    try:
-        host_subscription_client.install_katello_host_tools()
-    except ContentHostError:
-        pytest.fail('ContentHostError raised unexpectedly!')
-
-
-@pytest.mark.cli_host_subscription
-@pytest.mark.tier3
-def test_positive_attach_with_lce(
-    module_org,
-    module_promoted_cv,
-    module_lce,
-    module_rhst_repo,
-    default_subscription,
-    host_subscription_client,
-    target_sat,
-):
-    """Attempt to attach a subscription to host, registered by lce
-
-    :id: a362b959-9dde-4d1b-ae62-136c6ef943ba
-
-    :BZ: 1199515
-
-    :customerscenario: true
-
-    :expectedresults: host successfully subscribed, subscription
-        repository enabled, and repository package installed
-
-    :parametrized: yes
-    """
-    host_subscription_client.register_contenthost(
-        module_org.name,
-        lce=f'{module_lce.name}/{module_promoted_cv.name}',
-        auto_attach=False,
-    )
-    assert host_subscription_client.subscribed
-    host = target_sat.cli.Host.info({'name': host_subscription_client.hostname})
-    target_sat.cli.Host.subscription_attach(
-        {
-            'host-id': host['id'],
-            'subscription-id': default_subscription.id,
-            'quantity': 2,
-        }
-    )
-    host_subscription_client.enable_repo(module_rhst_repo)
-    # ensure that katello-host-tools can be installed
-    try:
-        host_subscription_client.install_katello_host_tools()
-    except ContentHostError:
-        pytest.fail('ContentHostError raised unexpectedly!')
-
-
-@pytest.mark.cli_host_subscription
-@pytest.mark.tier3
-def test_negative_without_attach(
-    module_org, module_promoted_cv, module_lce, host_subscription_client, target_sat
-):
-    """Register content host from satellite, register client to uuid
-    of that content host, as there was no attach on the client,
-    Test if the list of the repository subscriptions is empty
-
-    :id: 54a2c95f-be08-4353-a96c-4bc4d96ad03d
-
-    :expectedresults: repository list is empty
-
-    :parametrized: yes
-    """
-    target_sat.cli.Host.subscription_register(
-        {
-            'organization-id': module_org.id,
-            'content-view-id': module_promoted_cv.id,
-            'lifecycle-environment-id': module_lce.id,
-            'name': host_subscription_client.hostname,
-        }
-    )
-    host = target_sat.cli.Host.info({'name': host_subscription_client.hostname})
-    host_subscription_client.register_contenthost(
-        module_org.name,
-        lce=None,  # required, to jump into right branch in register_contenthost method
-        consumerid=host['subscription-information']['uuid'],
-        force=False,
-    )
-    client_status = host_subscription_client.subscription_manager_status()
-    assert SM_OVERALL_STATUS['current'] in client_status.stdout
-    repo_list = host_subscription_client.subscription_manager_list_repos()
-    assert "This system has no repositories available through subscriptions." in repo_list.stdout
-
-
-@pytest.mark.cli_host_subscription
-@pytest.mark.tier3
-def test_negative_without_attach_with_lce(
-    target_sat,
-    host_subscription_client,
+    rhel_contenthost,
+    function_ak_with_cv,
     function_org,
     function_lce,
 ):
@@ -2026,15 +1909,11 @@ def test_negative_without_attach_with_lce(
 
     :id: fc469e70-a7cb-4fca-b0ea-3c9e3dfff849
 
-    :expectedresults: Repository enabled due to SCA. Why is this "negative"? To keep history, because pre-6.16, this would have failed.
+    :expectedresults: Repository enabled due to SCA.
 
     :parametrized: yes
     """
     content_view = target_sat.api.ContentView(organization=function_org).create()
-    ak = target_sat.api.ActivationKey(
-        environment=function_lce,
-        organization=function_org,
-    ).create()
     target_sat.cli_factory.setup_org_for_a_rh_repo(
         {
             'product': PRDS['rhel'],
@@ -2043,185 +1922,22 @@ def test_negative_without_attach_with_lce(
             'organization-id': function_org.id,
             'content-view-id': content_view.id,
             'lifecycle-environment-id': function_lce.id,
-            'activationkey-id': ak.id,
+            'activationkey-id': function_ak_with_cv.id,
             'subscription': DEFAULT_SUBSCRIPTION_NAME,
         },
         force_use_cdn=True,
     )
 
     # register client
-    host_subscription_client.register_contenthost(
-        function_org.name,
-        lce=f'{function_lce.name}/{content_view.name}',
-        auto_attach=False,
-    )
-
-    assert host_subscription_client.subscribed
-    res = host_subscription_client.enable_repo(REPOS['rhsclient7']['id'])
+    result = rhel_contenthost.register(function_org, None, function_ak_with_cv.name, target_sat)
+    assert result.status == 0
+    assert rhel_contenthost.subscribed
+    res = rhel_contenthost.enable_repo(REPOS['rhsclient7']['id'])
     assert res.status == 0
     assert f"Repository '{REPOS['rhsclient7']['id']}' is enabled for this system." in res.stdout
 
 
-@pytest.mark.e2e
-@pytest.mark.cli_host_subscription
-@pytest.mark.tier3
-@pytest.mark.upgrade
-def test_positive_remove(
-    module_org,
-    module_promoted_cv,
-    module_lce,
-    ak_with_subscription,
-    default_subscription,
-    host_subscription_client,
-    target_sat,
-):
-    """Attempt to remove a subscription from content host
-
-    :id: 3833c349-1f5b-41ac-bbac-2c1f33232d76
-
-    :expectedresults: subscription successfully removed from host
-
-    :parametrized: yes
-    """
-    target_sat.cli.Host.subscription_register(
-        {
-            'organization-id': module_org.id,
-            'content-view-id': module_promoted_cv.id,
-            'lifecycle-environment-id': module_lce.id,
-            'name': host_subscription_client.hostname,
-        }
-    )
-    host = target_sat.cli.Host.info({'name': host_subscription_client.hostname})
-    host_subscriptions = target_sat.cli.ActivationKey.subscriptions(
-        {
-            'organization-id': module_org.id,
-            'id': ak_with_subscription.id,
-            'host-id': host['id'],
-        },
-        output_format='json',
-    )
-    assert default_subscription.name not in [sub['name'] for sub in host_subscriptions]
-    host_subscription_client.register_contenthost(
-        module_org.name, activation_key=ak_with_subscription.name
-    )
-    target_sat.cli.Host.subscription_attach(
-        {
-            'host-id': host['id'],
-            'subscription-id': default_subscription.id,
-        }
-    )
-    host_subscriptions = target_sat.cli.ActivationKey.subscriptions(
-        {
-            'organization-id': module_org.id,
-            'id': ak_with_subscription.id,
-            'host-id': host['id'],
-        },
-        output_format='json',
-    )
-    assert default_subscription.name in [sub['name'] for sub in host_subscriptions]
-    target_sat.cli.Host.subscription_remove(
-        {
-            'host-id': host['id'],
-            'subscription-id': default_subscription.id,
-        }
-    )
-    host_subscriptions = target_sat.cli.ActivationKey.subscriptions(
-        {
-            'organization-id': module_org.id,
-            'id': ak_with_subscription.id,
-            'host-id': host['id'],
-        },
-        output_format='json',
-    )
-    assert default_subscription.name not in [sub['name'] for sub in host_subscriptions]
-
-
-@pytest.mark.cli_host_subscription
-@pytest.mark.tier3
-def test_positive_auto_attach(
-    module_org,
-    module_promoted_cv,
-    module_lce,
-    module_rhst_repo,
-    ak_with_subscription,
-    host_subscription_client,
-    target_sat,
-):
-    """Attempt to auto attach a subscription to content host
-
-    :id: e3eebf72-d512-4892-828b-70165ea4b129
-
-    :expectedresults: host successfully subscribed, subscription
-        repository enabled, and repository package installed
-
-    :parametrized: yes
-    """
-    target_sat.cli.Host.subscription_register(
-        {
-            'organization-id': module_org.id,
-            'content-view-id': module_promoted_cv.id,
-            'lifecycle-environment-id': module_lce.id,
-            'name': host_subscription_client.hostname,
-        }
-    )
-    host = target_sat.cli.Host.info({'name': host_subscription_client.hostname})
-    host_subscription_client.register_contenthost(
-        module_org.name, activation_key=ak_with_subscription.name
-    )
-    target_sat.cli.Host.subscription_auto_attach({'host-id': host['id']})
-    host_subscription_client.enable_repo(module_rhst_repo)
-    # ensure that katello-host-tools can be installed
-    try:
-        host_subscription_client.install_katello_host_tools()
-    except ContentHostError:
-        pytest.fail('ContentHostError raised unexpectedly!')
-
-
-@pytest.mark.cli_host_subscription
-@pytest.mark.tier3
-def test_positive_unregister_host_subscription(
-    module_org, module_rhst_repo, ak_with_subscription, host_subscription_client, target_sat
-):
-    """Attempt to unregister host subscription
-
-    :id: 608f5b6d-4688-478e-8be8-e946771d5247
-
-    :expectedresults: host subscription is unregistered
-
-    :parametrized: yes
-    """
-    # register the host client
-    host_subscription_client.register_contenthost(
-        module_org.name, activation_key=ak_with_subscription.name
-    )
-
-    assert host_subscription_client.subscribed
-    host_subscription_client.run('subscription-manager attach --auto')
-    host_subscription_client.enable_repo(module_rhst_repo)
-    assert host_subscription_client.subscribed
-    host = target_sat.cli.Host.info({'name': host_subscription_client.hostname})
-    host_subscriptions = target_sat.cli.ActivationKey.subscriptions(
-        {
-            'organization-id': module_org.id,
-            'id': ak_with_subscription.id,
-            'host-id': host['id'],
-        },
-        output_format='json',
-    )
-    assert len(host_subscriptions) > 0
-    target_sat.cli.Host.subscription_unregister({'host': host_subscription_client.hostname})
-    with pytest.raises(CLIReturnCodeError):
-        # raise error that the host was not registered by
-        # subscription-manager register
-        target_sat.cli.ActivationKey.subscriptions(
-            {
-                'organization-id': module_org.id,
-                'id': ak_with_subscription.id,
-                'host-id': host['id'],
-            }
-        )
-
-
+@pytest.mark.rhel_ver_match('9')
 @pytest.mark.pit_client
 @pytest.mark.pit_server
 @pytest.mark.cli_host_subscription
@@ -2234,7 +1950,7 @@ def test_syspurpose_end_to_end(
     module_lce,
     module_rhst_repo,
     default_subscription,
-    host_subscription_client,
+    rhel_contenthost,
 ):
     """Create a host with system purpose values set by activation key.
 
@@ -2257,23 +1973,14 @@ def test_syspurpose_end_to_end(
         purpose_usage="test-usage",
         service_level="Self-Support",
     ).create()
-    target_sat.cli.ActivationKey.add_subscription(
-        {
-            'organization-id': module_org.id,
-            'id': activation_key.id,
-            'subscription-id': default_subscription.id,
-        }
-    )
     # Register a host using the activation key
-    host_subscription_client.register_contenthost(
-        module_org.name, activation_key=activation_key.name
-    )
-    assert host_subscription_client.subscribed
-    host_subscription_client.run('subscription-manager attach --auto')
-    host_subscription_client.enable_repo(module_rhst_repo)
-    host = target_sat.cli.Host.info({'name': host_subscription_client.hostname})
+    res = rhel_contenthost.register(module_org, None, activation_key.name, target_sat)
+    assert res.status == 0, f'Failed to register host: {res.stderr}'
+    assert rhel_contenthost.subscribed
+    rhel_contenthost.enable_repo(module_rhst_repo)
+    host = target_sat.cli.Host.info({'name': rhel_contenthost.hostname})
     # Assert system purpose values are set in the host as expected
-    assert host['subscription-information']['system-purpose']['purpose-addons'] == purpose_addons
+    assert host['subscription-information']['system-purpose']['purpose-addons'][0] == purpose_addons
     assert host['subscription-information']['system-purpose']['purpose-role'] == "test-role"
     assert host['subscription-information']['system-purpose']['purpose-usage'] == "test-usage"
     assert host['subscription-information']['system-purpose']['service-level'] == "Self-Support"
@@ -2289,22 +1996,13 @@ def test_syspurpose_end_to_end(
     )
     host = target_sat.cli.Host.info({'id': host['id']})
     # Assert system purpose values have been updated in the host as expected
-    assert host['subscription-information']['system-purpose']['purpose-addons'] == "test-addon3"
+    assert host['subscription-information']['system-purpose']['purpose-addons'][0] == "test-addon3"
     assert host['subscription-information']['system-purpose']['purpose-role'] == "test-role2"
     assert host['subscription-information']['system-purpose']['purpose-usage'] == "test-usage2"
     assert host['subscription-information']['system-purpose']['service-level'] == "Self-Support2"
-    host_subscriptions = target_sat.cli.ActivationKey.subscriptions(
-        {
-            'organization-id': module_org.id,
-            'id': activation_key.id,
-            'host-id': host['id'],
-        },
-        output_format='json',
-    )
-    assert len(host_subscriptions) > 0
-    assert host_subscriptions[0]['name'] == default_subscription.name
+
     # Unregister host
-    target_sat.cli.Host.subscription_unregister({'host': host_subscription_client.hostname})
+    target_sat.cli.Host.subscription_unregister({'host': rhel_contenthost.hostname})
     with pytest.raises(CLIReturnCodeError):
         # raise error that the host was not registered by
         # subscription-manager register
@@ -2315,6 +2013,295 @@ def test_syspurpose_end_to_end(
                 'host-id': host['id'],
             }
         )
+
+
+# -------------------------- MULTI-CV SCENARIOS -------------------------
+@pytest.mark.no_containers
+@pytest.mark.rhel_ver_match('[^7]')
+def test_negative_multi_cv_registration(
+    module_org,
+    module_ak_with_cv,
+    module_lce,
+    module_lce_library,
+    module_published_cv,
+    module_promoted_cv,
+    target_sat,
+    rhel_contenthost,
+):
+    """Attempt to register a host to multiple content view environments.
+
+    :id: 52be9b92-55aa-44b7-8157-1998a8effb40
+
+    :steps:
+        1. Register a host with global reg, just to get the sub-man config and certs right
+        2. Unregister the host
+        3. Verify that allow_multiple_content_views setting is not exposed
+        4. Attempt to register the host with subscription-manager, passing multiple environments
+        5. Confirm that registration fails
+
+    :expectedresults: allow_multiple_content_views setting is not exposed, and defaults to false.
+        So registration fails because multiple environments are not allowed.
+
+    :CaseImportance: Critical
+
+    :CaseComponent: Hosts-Content
+
+    :team: Phoenix-subscriptions
+
+    :parametrized: yes
+    """
+
+    # Register with global reg, just to get the sub-man config and certs right
+    result = rhel_contenthost.register(module_org, None, module_ak_with_cv.name, target_sat)
+    assert result.status == 0
+    assert rhel_contenthost.subscribed
+
+    # Unregister the host
+    unregister_result = rhel_contenthost.unregister()
+    assert unregister_result.status == 0
+
+    # Verify that allow_multiple_content_views setting is not exposed
+    with pytest.raises(CLIReturnCodeError):
+        target_sat.cli.Settings.info({'name': 'allow_multiple_content_views'})
+
+    env_names = f"{module_lce_library.name}/{module_published_cv.name},{module_lce.name}/{module_promoted_cv.name}"
+
+    # Register the host with subscription-manager, passing multiple environments
+    res = rhel_contenthost.register_contenthost(module_org.label, lce=None, environments=env_names)
+    assert (
+        res.status == 70
+    ), f'Expecting error "Registering to multiple environments is not enabled"; instead got: {res.stderr}'
+
+
+@pytest.mark.rhel_ver_match('[^7]')
+def test_positive_multi_cv_registration(
+    session_multicv_sat,
+    session_multicv_org,
+    session_multicv_default_ak,
+    session_multicv_lce,
+    rhel_contenthost,
+):
+    """Register a host to multiple content view environments.
+
+    :id: d0f78923-cace-4dc4-9936-81fe7e189a6b
+
+    :steps:
+        1. Register a host with global reg, just to get the sub-man config and certs right
+        2. Unregister the host
+        3. Attempt to register the host with subscription-manager, passing multiple environments
+        4. Confirm that registration succeeds
+        5. Confirm that the host is registered to both environments
+
+    :expectedresults: Registration succeeds and the host is registered to both environments.
+
+    :CaseImportance: Critical
+
+    :CaseComponent: Hosts-Content
+
+    :team: Phoenix-subscriptions
+
+    :parametrized: yes
+    """
+
+    library_lce = (
+        session_multicv_sat.api.LifecycleEnvironment()
+        .search(query={'search': f'name=Library and organization_id={session_multicv_org.id}'})[0]
+        .read()
+    )
+
+    # Create a content view
+    cv1 = session_multicv_sat.api.ContentView(organization=session_multicv_org).create()
+    cv1.publish()
+    cv1 = cv1.read()
+
+    # Create a second content view
+    cv2 = session_multicv_sat.api.ContentView(organization=session_multicv_org).create()
+    cv2.publish()
+    cv2 = cv2.read()
+    cv2_version = cv2.version[0]
+    cv2_version.promote(data={'environment_ids': session_multicv_lce.id})
+
+    # Register with global reg, just to get the sub-man config and certs right
+    result = rhel_contenthost.register(
+        session_multicv_org, None, session_multicv_default_ak.name, session_multicv_sat
+    )
+    assert result.status == 0
+    assert rhel_contenthost.subscribed
+
+    # Unregister the host
+    unregister_result = rhel_contenthost.unregister()
+    assert unregister_result.status == 0
+
+    # Register the host with subscription-manager, passing multiple environments
+    env_names = f"{library_lce.name}/{cv1.name},{session_multicv_lce.name}/{cv2.name}"
+    res = rhel_contenthost.register_contenthost(
+        session_multicv_org.label, lce=None, environments=env_names
+    )
+
+    # Confirm that registration succeeds
+    assert res.status == 0
+    assert rhel_contenthost.subscribed
+
+    # Confirm that the host is registered to both environments
+    host = session_multicv_sat.cli.Host.info({'name': rhel_contenthost.hostname})
+    assert (
+        len(host['content-information']['content-view-environments']) == 2
+    ), "Expected host to be registered to both environments"
+
+
+@pytest.mark.rhel_ver_match('[^7]')
+def test_positive_multi_cv_assignment(
+    session_multicv_sat,
+    session_multicv_org,
+    session_multicv_default_ak,
+    session_multicv_lce,
+    rhel_contenthost,
+):
+    """Register a host and assign it to multiple content view environments with Hammer.
+
+    :id: c6a120a8-c6b6-483e-ac76-0e67d754038c
+
+    :steps:
+        1. Register a host with global registration
+        2. Update the host using hammer to assign it to multiple content view environments
+        3. Confirm that the host is registered to both environments
+
+    :expectedresults: The update succeeds and the host is assigned to both environments.
+
+    :CaseImportance: Critical
+
+    :CaseComponent: Hosts-Content
+
+    :team: Phoenix-subscriptions
+
+    :parametrized: yes
+    """
+
+    library_lce = (
+        session_multicv_sat.api.LifecycleEnvironment()
+        .search(query={'search': f'name=Library and organization_id={session_multicv_org.id}'})[0]
+        .read()
+    )
+
+    # Create a content view
+    cv1 = session_multicv_sat.api.ContentView(organization=session_multicv_org).create()
+    cv1.publish()
+    cv1 = cv1.read()
+
+    # Create a second content view
+    cv2 = session_multicv_sat.api.ContentView(organization=session_multicv_org).create()
+    cv2.publish()
+    cv2 = cv2.read()
+    cv2_version = cv2.version[0]
+    cv2_version.promote(data={'environment_ids': session_multicv_lce.id})
+
+    # Register with global registration
+    result = rhel_contenthost.register(
+        session_multicv_org, None, session_multicv_default_ak.name, session_multicv_sat
+    )
+    assert result.status == 0
+    assert rhel_contenthost.subscribed
+
+    # Assign multiple content view environments to the host using hammer
+    env_names = f"{library_lce.name}/{cv1.name},{session_multicv_lce.name}/{cv2.name}"
+    host = session_multicv_sat.cli.Host.info({'name': rhel_contenthost.hostname})
+    session_multicv_sat.cli.Host.update({'id': host['id'], 'content-view-environments': env_names})
+
+    # Confirm that the host is registered to both environments
+    host = session_multicv_sat.cli.Host.info({'name': rhel_contenthost.hostname})
+    assert (
+        len(host['content-information']['content-view-environments']) == 2
+    ), "Expected host to be registered to both environments"
+
+
+@pytest.mark.rhel_ver_match('[^7]')
+def test_positive_multi_cv_host_repo_availability(
+    session_multicv_sat,
+    rhel_contenthost,
+    session_multicv_org,
+    session_multicv_default_ak,
+):
+    """Multi-environment hosts should have access to repositories from all of their content view environments.
+
+    :id: 6a15d591-be84-4b5b-8deb-8ea6eb32fee6
+
+    :setup:
+        1. Create two lifecycle environments
+        2. Create two synced custom repositories
+        3. Create two content views, each with a repo in them, and promote them to their own lifecycle environment
+
+    :steps:
+        1. Register a host with global registration to a single content view environment
+        2. Assign the host to multiple content view environments
+        3. Confirm repos listed in subscription-manager repos match the repos in the content view environments
+
+    :expectedresults: Host sees repositories from both content view environments, not just one.
+
+    :CaseImportance: Critical
+
+    :CaseComponent: Hosts-Content
+
+    :team: Phoenix-subscriptions
+
+    :parametrized: yes
+    """
+
+    # Create two lifecycle environments
+    lce1 = session_multicv_sat.api.LifecycleEnvironment(organization=session_multicv_org).create()
+    lce2 = session_multicv_sat.api.LifecycleEnvironment(organization=session_multicv_org).create()
+
+    # Create two synced custom repositories
+    repo_instances = []
+    for repo in ['RepoA', 'RepoB']:
+        repo_id = session_multicv_sat.api_factory.create_sync_custom_repo(
+            org_id=session_multicv_org.id,
+            product_name=gen_string('alpha'),
+            repo_name=repo,
+            repo_url=settings.repos.fake_repo_zoo3,
+        )
+        repo_instances.append(session_multicv_sat.api.Repository(id=repo_id).read())
+
+    repo_b = repo_instances.pop()
+    repo_a = repo_instances.pop()
+
+    # Create two content views, each with a repo in them, and promote them to their own lifecycle environment
+
+    cv1 = session_multicv_sat.api.ContentView(
+        organization=session_multicv_org, repository=[repo_a]
+    ).create()
+    cv1.publish()
+    cv1 = cv1.read()
+
+    module_published_cvv = cv1.read().version[0]
+    module_published_cvv.promote(data={'environment_ids': lce1.id})
+
+    cv2 = session_multicv_sat.api.ContentView(
+        organization=session_multicv_org, repository=[repo_b]
+    ).create()
+    cv2.publish()
+    cv2_content_view_version = cv2.read().version[0]
+    cv2_content_view_version.promote(data={'environment_ids': lce2.id})
+
+    # Register with global registration
+    result = rhel_contenthost.register(
+        session_multicv_org, None, session_multicv_default_ak.name, session_multicv_sat
+    )
+    assert result.status == 0
+    assert rhel_contenthost.subscribed
+
+    # Assign the host to multiple content view environments with subscription-manager
+    env_names = f"{lce2.name}/{cv2.name},{lce1.name}/{cv1.name}"
+    rhel_contenthost.subscription_manager_environments_set(env_names)
+
+    host = session_multicv_sat.cli.Host.info({'name': rhel_contenthost.hostname})
+    repos = rhel_contenthost.subscription_manager_list_repos()
+    # Confirm that the host is registered to both environments
+    assert (
+        len(host['content-information']['content-view-environments']) == 2
+    ), "Expected host to be registered to both environments"
+    # Confirm that the host sees repositories from both content view environments
+    assert repo_a.label in repos.stdout
+    assert repo_b.label in repos.stdout
 
 
 # -------------------------- HOST ERRATA SUBCOMMAND SCENARIOS -------------------------
@@ -2357,6 +2344,7 @@ def test_positive_dump_enc_yaml(target_sat):
 
 
 # -------------------------- HOST TRACE SUBCOMMAND SCENARIOS -------------------------
+@pytest.mark.pit_client
 @pytest.mark.tier3
 @pytest.mark.rhel_ver_match('[^6].*')
 def test_positive_tracer_list_and_resolve(tracer_host, target_sat):
@@ -2629,7 +2617,7 @@ def test_positive_update_host_owner_and_verify_puppet_class_name(
 @pytest.mark.cli_puppet_enabled
 @pytest.mark.run_in_one_thread
 @pytest.mark.tier2
-@pytest.mark.rhel_ver_match('[8]')
+@pytest.mark.rhel_ver_match('[9]')
 @pytest.mark.no_containers
 def test_positive_create_and_update_with_content_source(
     target_sat,
@@ -2694,3 +2682,114 @@ def test_positive_create_and_update_with_content_source(
     target_sat.cli.Capsule.content_synchronize({'name': module_capsule_configured.hostname})
     assert rhel_contenthost.execute(f'dnf -y install {package}').status == 0
     assert rhel_contenthost.execute(f'rpm -q {package}').status == 0
+
+
+@pytest.mark.cli_host_create
+@pytest.mark.tier2
+def test_positive_create_host_with_lifecycle_environment_name(
+    module_lce,
+    module_org,
+    module_promoted_cv,
+    module_target_sat,
+):
+    """Attempt to create a host with lifecycle-environment name specified
+
+    :id: 7445ad21-538f-4357-8bd1-9676d2478633
+
+    :BZ: 2106256
+
+    :expectedresults: Host is created with no errors
+
+    :customerscenario: true
+
+    :CaseImportance: Medium
+    """
+    found_host = False
+    new_host = module_target_sat.cli_factory.make_fake_host(
+        {
+            'content-view-id': module_promoted_cv.id,
+            'lifecycle-environment': module_lce.name,
+            'organization-id': module_org.id,
+        }
+    )
+    hosts = module_target_sat.cli.Host.list({'organization-id': module_org.id})
+    found_host = any(new_host.name in i.values() for i in hosts)
+    assert found_host, 'Assertion failed: host not found'
+
+
+@pytest.mark.rhel_ver_match('^6')
+@pytest.mark.parametrize(
+    'setting_update', ['validate_host_lce_content_source_coherence'], indirect=False
+)
+def test_host_registration_with_capsule_using_content_coherence(
+    module_target_sat,
+    setting_update,
+    module_sca_manifest_org,
+    module_activation_key,
+    rhel_contenthost,
+    module_capsule_configured,
+):
+    """Register client with capsule when settings "validate_host_lce_content_source_coherence" is set to Yes/No
+
+    :id: 17dbec62-eed4-4a51-9927-80919457a124
+
+    :Verifies: SAT-22048
+
+    :setup:
+        1. Create AK which is associated with the organization
+        2. Configure capsule with satellite
+
+    :steps:
+        1. Register client with capsule when settings "validate_host_lce_content_source_coherence" is set to Yes
+        2. Check output for "HTTP error code 422: Validation failed: Content view environment content facets is invalid"
+        3. Re-register client with settings "validate_host_lce_content_source_coherence" is set to No
+        4. Check output there should not be any error like "Validation failed" or "HTTP error code 422"
+
+    :expectedresults: Host registration success with error when settings set to Yes and Host registration success when
+     settings set to No
+
+    :customerscenario: true
+
+    :parametrized: yes
+
+    :CaseImportance: High
+    """
+    # set a new proxy
+    module_target_sat.cli.Capsule.update(
+        {'name': module_capsule_configured.hostname, 'organization-ids': module_sca_manifest_org.id}
+    )
+    # Register client with capsule when settings "validate_host_lce_content_source_coherence" is set to Yes
+    module_target_sat.cli.Settings.set(
+        {'name': 'validate_host_lce_content_source_coherence', 'value': 'true'}
+    )
+    result = rhel_contenthost.register(
+        module_sca_manifest_org,
+        None,
+        module_activation_key.name,
+        module_capsule_configured,
+        force=True,
+    )
+    assert result.status == 0, f'Failed to register host: {result.stderr}'
+
+    # Check output for "HTTP error code 422: Validation failed: Content view environment content facets is invalid"
+    assert 'Validation failed' in result.stderr, f'Error is: {result.stderr}'
+    if rhel_contenthost.os_version.major != 7:
+        assert 'HTTP error code 422' in result.stderr, f'Error is: {result.stderr}'
+
+    # Re-register client with settings "validate_host_lce_content_source_coherence" is set to No
+    module_target_sat.cli.Settings.set(
+        {'name': 'validate_host_lce_content_source_coherence', 'value': 'false'}
+    )
+    result = rhel_contenthost.register(
+        module_sca_manifest_org,
+        None,
+        module_activation_key.name,
+        module_capsule_configured,
+        force=True,
+    )
+    assert result.status == 0, f'Failed to register host: {result.stderr}'
+
+    # Check output there should not any error like "Validation failed" or "HTTP error code 422"
+    assert 'Validation failed' not in result.stderr, f'Error is: {result.stderr}'
+    if rhel_contenthost.os_version.major != 7:
+        assert 'HTTP error code 422' not in result.stderr, f'Error is: {result.stderr}'

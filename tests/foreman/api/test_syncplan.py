@@ -15,6 +15,7 @@ API reference for sync plans can be found on your Satellite:
 :CaseImportance: High
 
 """
+
 from datetime import datetime, timedelta
 from time import sleep
 
@@ -783,7 +784,7 @@ def test_positive_synchronize_custom_products_future_sync_date(module_org, reque
 @pytest.mark.run_in_one_thread
 @pytest.mark.tier4
 def test_positive_synchronize_rh_product_past_sync_date(
-    request, function_entitlement_manifest_org, target_sat
+    request, function_sca_manifest_org, target_sat
 ):
     """Create a sync plan with past datetime as a sync date, add a
     RH product and verify the product gets synchronized on the next sync
@@ -799,7 +800,7 @@ def test_positive_synchronize_rh_product_past_sync_date(
     """
     interval = 60 * 60  # 'hourly' sync interval in seconds
     delay = 2 * 60
-    org = function_entitlement_manifest_org
+    org = function_sca_manifest_org
     repo_id = target_sat.api_factory.enable_rhrepo_and_fetchid(
         basearch='x86_64',
         org_id=org.id,
@@ -851,7 +852,7 @@ def test_positive_synchronize_rh_product_past_sync_date(
 @pytest.mark.tier4
 @pytest.mark.upgrade
 def test_positive_synchronize_rh_product_future_sync_date(
-    request, function_entitlement_manifest_org, target_sat
+    request, function_sca_manifest_org, target_sat
 ):
     """Create a sync plan with sync date in a future and sync one RH
     product with it automatically.
@@ -861,7 +862,7 @@ def test_positive_synchronize_rh_product_future_sync_date(
     :expectedresults: Product is synchronized successfully.
     """
     delay = 2 * 60  # delay for sync date in seconds
-    org = function_entitlement_manifest_org
+    org = function_sca_manifest_org
     repo_id = target_sat.api_factory.enable_rhrepo_and_fetchid(
         basearch='x86_64',
         org_id=org.id,
@@ -1021,26 +1022,6 @@ def test_positive_delete_products(module_org, target_sat):
     products = [target_sat.api.Product(organization=module_org).create() for _ in range(2)]
     [target_sat.api.Repository(product=product).create() for product in products]
     sync_plan.add_products(data={'product_ids': [product.id for product in products]})
-    sync_plan.delete()
-    with pytest.raises(HTTPError):
-        sync_plan.read()
-
-
-@pytest.mark.tier2
-@pytest.mark.upgrade
-def test_positive_delete_synced_product(module_org, module_target_sat):
-    """Create a sync plan with one synced product and delete it.
-
-    :id: 195d8fec-1fa0-42ab-84a5-32dd81a285ca
-
-    :expectedresults: A sync plan is created with one synced product and
-        sync plan can be deleted.
-    """
-    sync_plan = module_target_sat.api.SyncPlan(organization=module_org).create()
-    product = module_target_sat.api.Product(organization=module_org).create()
-    module_target_sat.api.Repository(product=product).create()
-    sync_plan.add_products(data={'product_ids': [product.id]})
-    product.sync()
     sync_plan.delete()
     with pytest.raises(HTTPError):
         sync_plan.read()

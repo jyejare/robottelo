@@ -15,6 +15,10 @@ https://<sat6.com>/apidoc/v2/subscriptions.html
 :CaseImportance: High
 
 """
+
+import re
+import time
+
 from fauxfactory import gen_string
 from nailgun.config import ServerConfig
 from nailgun.entity_mixins import TaskFailedError
@@ -67,7 +71,7 @@ def module_ak(module_sca_manifest_org, rh_repo, custom_repo, module_target_sat):
 
 @pytest.mark.tier1
 @pytest.mark.pit_server
-def test_positive_create(module_entitlement_manifest, module_target_sat):
+def test_positive_create(module_sca_manifest, module_target_sat):
     """Upload a manifest.
 
     :id: 6faf9d96-9b45-4bdc-afa9-ec3fbae83d41
@@ -77,11 +81,11 @@ def test_positive_create(module_entitlement_manifest, module_target_sat):
     :CaseImportance: Critical
     """
     org = module_target_sat.api.Organization().create()
-    module_target_sat.upload_manifest(org.id, module_entitlement_manifest.content)
+    module_target_sat.upload_manifest(org.id, module_sca_manifest.content)
 
 
 @pytest.mark.tier1
-def test_positive_refresh(function_entitlement_manifest_org, request, target_sat):
+def test_positive_refresh(function_sca_manifest_org, request, target_sat):
     """Upload a manifest and refresh it afterwards.
 
     :id: cd195db6-e81b-42cb-a28d-ec0eb8a53341
@@ -90,7 +94,7 @@ def test_positive_refresh(function_entitlement_manifest_org, request, target_sat
 
     :CaseImportance: Critical
     """
-    org = function_entitlement_manifest_org
+    org = function_sca_manifest_org
     sub = target_sat.api.Subscription(organization=org)
     request.addfinalizer(lambda: sub.delete_manifest(data={'organization_id': org.id}))
     sub.refresh_manifest(data={'organization_id': org.id})
@@ -99,7 +103,7 @@ def test_positive_refresh(function_entitlement_manifest_org, request, target_sat
 
 @pytest.mark.tier1
 def test_positive_create_after_refresh(
-    function_entitlement_manifest_org, function_secondary_entitlement_manifest, target_sat
+    function_sca_manifest_org, second_function_sca_manifest, target_sat
 ):
     """Upload a manifest,refresh it and upload a new manifest to an other
      organization.
@@ -114,20 +118,20 @@ def test_positive_create_after_refresh(
 
     :CaseImportance: Critical
     """
-    org_sub = target_sat.api.Subscription(organization=function_entitlement_manifest_org)
+    org_sub = target_sat.api.Subscription(organization=function_sca_manifest_org)
     new_org = target_sat.api.Organization().create()
     new_org_sub = target_sat.api.Subscription(organization=new_org)
     try:
-        org_sub.refresh_manifest(data={'organization_id': function_entitlement_manifest_org.id})
+        org_sub.refresh_manifest(data={'organization_id': function_sca_manifest_org.id})
         assert org_sub.search()
-        target_sat.upload_manifest(new_org.id, function_secondary_entitlement_manifest.content)
+        target_sat.upload_manifest(new_org.id, second_function_sca_manifest.content)
         assert new_org_sub.search()
     finally:
-        org_sub.delete_manifest(data={'organization_id': function_entitlement_manifest_org.id})
+        org_sub.delete_manifest(data={'organization_id': function_sca_manifest_org.id})
 
 
 @pytest.mark.tier1
-def test_positive_delete(function_entitlement_manifest_org, target_sat):
+def test_positive_delete(function_sca_manifest_org, target_sat):
     """Delete an Uploaded manifest.
 
     :id: 4c21c7c9-2b26-4a65-a304-b978d5ba34fc
@@ -136,14 +140,14 @@ def test_positive_delete(function_entitlement_manifest_org, target_sat):
 
     :CaseImportance: Critical
     """
-    sub = target_sat.api.Subscription(organization=function_entitlement_manifest_org)
+    sub = target_sat.api.Subscription(organization=function_sca_manifest_org)
     assert sub.search()
-    sub.delete_manifest(data={'organization_id': function_entitlement_manifest_org.id})
+    sub.delete_manifest(data={'organization_id': function_sca_manifest_org.id})
     assert len(sub.search()) == 0
 
 
 @pytest.mark.tier2
-def test_negative_upload(function_entitlement_manifest, target_sat):
+def test_negative_upload(function_sca_manifest, target_sat):
     """Upload the same manifest to two organizations.
 
     :id: 60ca078d-cfaf-402e-b0db-34d8901449fe
@@ -152,7 +156,7 @@ def test_negative_upload(function_entitlement_manifest, target_sat):
         organization.
     """
     orgs = [target_sat.api.Organization().create() for _ in range(2)]
-    with function_entitlement_manifest as manifest:
+    with function_sca_manifest as manifest:
         target_sat.upload_manifest(orgs[0].id, manifest.content)
         with pytest.raises(TaskFailedError):
             target_sat.upload_manifest(orgs[1].id, manifest.content)
@@ -160,9 +164,7 @@ def test_negative_upload(function_entitlement_manifest, target_sat):
 
 
 @pytest.mark.tier2
-def test_positive_delete_manifest_as_another_user(
-    function_org, function_entitlement_manifest, target_sat
-):
+def test_positive_delete_manifest_as_another_user(function_org, function_sca_manifest, target_sat):
     """Verify that uploaded manifest if visible and deletable
         by a different user than the one who uploaded it
 
@@ -201,7 +203,7 @@ def test_positive_delete_manifest_as_another_user(
         verify=settings.server.verify_ca,
     )
     # use the first admin to upload a manifest
-    with function_entitlement_manifest as manifest:
+    with function_sca_manifest as manifest:
         target_sat.api.Subscription(server_config=sc1, organization=function_org).upload(
             data={'organization_id': function_org.id}, files={'content': manifest.content}
         )
@@ -213,35 +215,12 @@ def test_positive_delete_manifest_as_another_user(
 
 
 @pytest.mark.tier2
-def test_positive_subscription_status_disabled(
-    module_ak, rhel_contenthost, module_sca_manifest_org, target_sat
-):
-    """Verify that Content host Subscription status is set to 'Disabled'
-     for a golden ticket manifest
-
-    :id: d7d7e20a-e386-43d5-9619-da933aa06694
-
-    :expectedresults: subscription status is 'Disabled'
-
-    :customerscenario: true
-
-    :BZ: 1789924
-
-    :CaseImportance: Medium
-    """
-    rhel_contenthost.install_katello_ca(target_sat)
-    rhel_contenthost.register_contenthost(module_sca_manifest_org.label, module_ak.name)
-    assert rhel_contenthost.subscribed
-    host_content = target_sat.api.Host(id=rhel_contenthost.nailgun_host.id).read_raw().content
-    assert 'Simple Content Access' in str(host_content)
-
-
-@pytest.mark.tier2
 @pytest.mark.e2e
 @pytest.mark.pit_client
 @pytest.mark.pit_server
+@pytest.mark.rhel_ver_match('7')
 def test_sca_end_to_end(
-    module_ak, rhel7_contenthost, module_sca_manifest_org, rh_repo, custom_repo, target_sat
+    module_ak, rhel_contenthost, module_sca_manifest_org, rh_repo, custom_repo, target_sat
 ):
     """Perform end to end testing for Simple Content Access Mode
 
@@ -256,9 +235,13 @@ def test_sca_end_to_end(
 
     :CaseImportance: Critical
     """
-    rhel7_contenthost.install_katello_ca(target_sat)
-    rhel7_contenthost.register_contenthost(module_sca_manifest_org.label, module_ak.name)
-    assert rhel7_contenthost.subscribed
+    result = rhel_contenthost.api_register(
+        target_sat,
+        organization=module_sca_manifest_org,
+        activation_keys=[module_ak.name],
+    )
+    assert result.status == 0, f'Failed to register host: {result.stderr}'
+    assert rhel_contenthost.subscribed
     # Check to see if Organization is in SCA Mode
     assert (
         target_sat.api.Organization(id=module_sca_manifest_org.id).read().simple_content_access
@@ -273,7 +256,7 @@ def test_sca_end_to_end(
     assert 'Simple Content Access' in ak_context.value.response.text
     # Verify that you cannot attach a subscription to an Host in SCA Mode
     with pytest.raises(HTTPError) as host_context:
-        target_sat.api.HostSubscription(host=rhel7_contenthost.nailgun_host.id).add_subscriptions(
+        target_sat.api.HostSubscription(host=rhel_contenthost.nailgun_host.id).add_subscriptions(
             data={'subscriptions': [{'id': subscription.id, 'quantity': 1}]}
         )
     assert 'Simple Content Access' in host_context.value.response.text
@@ -283,37 +266,42 @@ def test_sca_end_to_end(
     content_view.update(['repository'])
     content_view.publish()
     assert len(content_view.repository) == 2
-    host = rhel7_contenthost.nailgun_host
-    host.content_facet_attributes = {'content_view_id': content_view.id}
+    host = rhel_contenthost.nailgun_host
+    host.content_facet_attributes = {
+        'content_view_id': content_view.id,
+        'lifecycle_environment_id': module_ak.environment.id,
+    }
     host.update(['content_facet_attributes'])
-    rhel7_contenthost.run('subscription-manager repos --enable *')
-    repos = rhel7_contenthost.run('subscription-manager refresh && yum repolist')
+    rhel_contenthost.run('subscription-manager repos --enable *')
+    repos = rhel_contenthost.run('subscription-manager refresh && yum repolist')
     assert content_view.repository[1].name in repos.stdout
     assert 'Red Hat Satellite Tools' in repos.stdout
     # install package and verify it succeeds or is already installed
-    package = rhel7_contenthost.run('yum install -y python-pulp-manifest')
+    package = rhel_contenthost.run('yum install -y python-pulp-manifest')
     assert 'Complete!' in package.stdout or 'already installed' in package.stdout
 
 
+@pytest.mark.rhel_ver_match('7')
 @pytest.mark.tier2
 def test_positive_candlepin_events_processed_by_stomp(
-    rhel7_contenthost, function_entitlement_manifest, function_org, target_sat
+    function_org, target_sat, function_sca_manifest
 ):
     """Verify that Candlepin events are being read and processed by
-        attaching subscriptions, validating host subscriptions status,
+        checking candlepin events, uploading a manifest,
         and viewing processed and failed Candlepin events
 
     :id: efd20ffd-8f98-4536-abb6-d080f9d23169
 
     :steps:
 
-        1. Add subscriptions to content host
-        2. Verify subscription status is invalid at
-            <your-satellite-url>/api/v2/hosts
+        1. Create a manifest
+        2. Check the number of candlepin events
+            /katello/api/v2/ping
         3. Import a Manifest
-        4. Attach subs to content host
-        5. Verify subscription status is valid
-        6. Check ping api for processed and failed events
+        4. Check the number of new candlepin events
+            /katello/api/v2/ping
+        5. Verify that the new candlepin events value is greater than the old value
+        6. Verify that there are no failed candlepin events
             /katello/api/v2/ping
 
     :expectedresults: Candlepin events are being read and processed
@@ -324,39 +312,27 @@ def test_positive_candlepin_events_processed_by_stomp(
 
     :CaseImportance: High
     """
-    repo = target_sat.api.Repository(
-        product=target_sat.api.Product(organization=function_org).create()
-    ).create()
-    repo.sync()
-    ak = target_sat.api.ActivationKey(
-        content_view=function_org.default_content_view,
-        max_hosts=100,
-        organization=function_org,
-        environment=target_sat.api.LifecycleEnvironment(id=function_org.library.id),
-        auto_attach=True,
-    ).create()
-    rhel7_contenthost.install_katello_ca(target_sat)
-    rhel7_contenthost.register_contenthost(function_org.name, ak.name)
-    host = target_sat.api.Host().search(query={'search': f'name={rhel7_contenthost.hostname}'})
-    host_id = host[0].id
-    host_content = target_sat.api.Host(id=host_id).read_json()
-    assert host_content['subscription_status'] == 2
-    with function_entitlement_manifest as manifest:
-        target_sat.upload_manifest(function_org.id, manifest.content)
-    subscription = target_sat.api.Subscription(organization=function_org).search(
-        query={'search': f'name="{DEFAULT_SUBSCRIPTION_NAME}"'}
-    )[0]
-    target_sat.api.HostSubscription(host=host_id).add_subscriptions(
-        data={'subscriptions': [{'id': subscription.cp_id, 'quantity': 1}]}
-    )
-    host_content = target_sat.api.Host(id=host_id).read_json()
-    assert host_content['subscription_status'] == 0
-    response = target_sat.api.Ping().search_json()['services']['candlepin_events']
-    assert response['status'] == 'ok'
-    assert '0 Failed' in response['message']
+
+    # Function to parse candlepin events
+    def parse(events):
+        return {key: int(value) for value, key in re.findall(r'(\d+)\s(\w+)', events)}
+
+    pre_candlepin_events = target_sat.api.Ping().search_json()['services']['candlepin_events'][
+        'message'
+    ]
+    target_sat.upload_manifest(function_org.id, function_sca_manifest.content)
+    time.sleep(5)
+    assert target_sat.api.Ping().search_json()['services']['candlepin_events']['status'] == 'ok'
+    post_candlepin_events = target_sat.api.Ping().search_json()['services']['candlepin_events'][
+        'message'
+    ]
+    assert parse(post_candlepin_events)['Processed'] > parse(pre_candlepin_events)['Processed']
+    assert parse(pre_candlepin_events)['Failed'] == 0
+    assert parse(post_candlepin_events)['Failed'] == 0
 
 
-def test_positive_expired_SCA_cert_handling(module_sca_manifest_org, rhel7_contenthost, target_sat):
+@pytest.mark.rhel_ver_match('7')
+def test_positive_expired_SCA_cert_handling(module_sca_manifest_org, rhel_contenthost, target_sat):
     """Verify that a content host with an expired SCA cert can
         re-register successfully
 
@@ -392,12 +368,14 @@ def test_positive_expired_SCA_cert_handling(module_sca_manifest_org, rhel7_conte
     ).create()
     # registering the content host with no content enabled/synced in the org
     # should create a client SCA cert with no content
-    rhel7_contenthost.install_katello_ca(target_sat)
-    rhel7_contenthost.register_contenthost(
-        org=module_sca_manifest_org.label, activation_key=ak.name
+    result = rhel_contenthost.api_register(
+        target_sat,
+        organization=module_sca_manifest_org,
+        activation_keys=[ak.name],
     )
-    assert rhel7_contenthost.subscribed
-    rhel7_contenthost.unregister()
+    assert result.status == 0, f'Failed to register host: {result.stderr}'
+    assert rhel_contenthost.subscribed
+    rhel_contenthost.unregister()
     # syncing content with the content host unregistered should invalidate
     # the previous client SCA cert
     rh_repo_id = target_sat.api_factory.enable_rhrepo_and_fetchid(
@@ -410,10 +388,16 @@ def test_positive_expired_SCA_cert_handling(module_sca_manifest_org, rhel7_conte
     )
     rh_repo = target_sat.api.Repository(id=rh_repo_id).read()
     rh_repo.sync()
-    # re-registering the host should test whether Candlepin gracefully handles
+    # re-registering the host (using force=True) should test whether Candlepin gracefully handles
     # registration of a host with an expired SCA cert
-    rhel7_contenthost.register_contenthost(module_sca_manifest_org.label, ak.name)
-    assert rhel7_contenthost.subscribed
+    result = rhel_contenthost.api_register(
+        target_sat,
+        organization=module_sca_manifest_org,
+        activation_keys=[ak.name],
+        force=True,
+    )
+    assert result.status == 0, f'Failed to register host: {result.stderr}'
+    assert rhel_contenthost.subscribed
 
 
 @pytest.mark.stubbed

@@ -3,6 +3,7 @@ This module is a more object oriented replacement for robottelo.cli.factory
 It is not meant to be used directly, but as part of a robottelo.hosts.Satellite instance
 example: my_satellite.cli_factory.make_org()
 """
+
 import datetime
 from functools import lru_cache, partial
 import inspect
@@ -33,7 +34,7 @@ from robottelo.host_helpers.repository_mixins import initiate_repo_helpers
 from robottelo.utils.manifest import clone
 
 
-def create_object(cli_object, options, values=None, credentials=None):
+def create_object(cli_object, options, values=None, credentials=None, timeout=None):
     """
     Creates <object> with dictionary of arguments.
 
@@ -52,13 +53,11 @@ def create_object(cli_object, options, values=None, credentials=None):
     if credentials:
         cli_object = cli_object.with_user(*credentials)
     try:
-        result = cli_object.create(options)
+        result = cli_object.create(options, timeout)
     except CLIReturnCodeError as err:
         # If the object is not created, raise exception, stop the show.
         raise CLIFactoryError(
-            'Failed to create {} with data:\n{}\n{}'.format(
-                cli_object.__name__, pprint.pformat(options, indent=2), err.msg
-            )
+            f'Failed to create {cli_object.__name__} with data:\n{pprint.pformat(options, indent=2)}\n{err.msg}'
         ) from err
     # Sometimes we get a list with a dictionary and not a dictionary.
     if isinstance(result, list) and len(result) > 0:
@@ -697,7 +696,7 @@ class CLIFactory:
             'repository-id': custom_repo['id'],
         }
 
-    def _setup_org_for_a_rh_repo(self, options=None):
+    def _setup_org_for_a_rh_repo(self, options=None, force=False):
         """Sets up Org for the given Red Hat repository by:
 
         1. Checks if organization and lifecycle environment were given, otherwise
@@ -793,7 +792,12 @@ class CLIFactory:
         # Promote version1 to next env
         try:
             self._satellite.cli.ContentView.version_promote(
-                {'id': cvv['id'], 'organization-id': org_id, 'to-lifecycle-environment-id': env_id}
+                {
+                    'id': cvv['id'],
+                    'organization-id': org_id,
+                    'to-lifecycle-environment-id': env_id,
+                    'force': force,
+                }
             )
         except CLIReturnCodeError as err:
             raise CLIFactoryError(
@@ -846,7 +850,11 @@ class CLIFactory:
         }
 
     def setup_org_for_a_rh_repo(
-        self, options=None, force_manifest_upload=False, force_use_cdn=False
+        self,
+        options=None,
+        force_manifest_upload=False,
+        force_use_cdn=False,
+        force=False,
     ):
         """Wrapper above ``_setup_org_for_a_rh_repo`` to use custom downstream repo
         instead of CDN's 'Satellite Capsule', 'Satellite Tools'  and base OS repos if
@@ -872,10 +880,12 @@ class CLIFactory:
             custom_repo_url = settings.repos.rhel6_os
         elif options.get('repository') == constants.REPOS['rhel7']['name']:
             custom_repo_url = settings.repos.rhel7_os
+        elif options.get('repository') == constants.REPOS['rhel8_aps']['name']:
+            custom_repo_url = settings.repos.rhel8_os.appstream
         elif 'Satellite Capsule' in options.get('repository'):
             custom_repo_url = settings.repos.capsule_repo
         if force_use_cdn or settings.robottelo.cdn or not custom_repo_url:
-            return self._setup_org_for_a_rh_repo(options)
+            return self._setup_org_for_a_rh_repo(options, force)
         options['url'] = custom_repo_url
         result = self.setup_org_for_a_custom_repo(options)
         if force_manifest_upload:
@@ -999,9 +1009,7 @@ class CLIFactory:
             missing_permissions = set(permission_names).difference(set(available_permission_names))
             if missing_permissions:
                 raise CLIFactoryError(
-                    'Permissions "{}" are not available in Resource "{}"'.format(
-                        list(missing_permissions), resource_type
-                    )
+                    f'Permissions "{list(missing_permissions)}" are not available in Resource "{resource_type}"'
                 )
             # Create the current resource type role permissions
             options = {'role-id': role_id}
@@ -1145,35 +1153,6 @@ class CLIFactory:
                     'content-view-id': content_view['id'],
                 }
             )
-        # Get organization subscriptions
-        subscriptions = self._satellite.cli.Subscription.list(
-            {'organization-id': org_id}, per_page=False
-        )
-        # Add subscriptions to activation-key
-        needed_subscription_names = list(rh_subscriptions)
-        if custom_product:
-            needed_subscription_names.append(custom_product['name'])
-        added_subscription_names = []
-        for subscription in subscriptions:
-            if (
-                subscription['name'] in needed_subscription_names
-                and subscription['name'] not in added_subscription_names
-            ):
-                self._satellite.cli.ActivationKey.add_subscription(
-                    {
-                        'id': activation_key['id'],
-                        'subscription-id': subscription['id'],
-                        'quantity': 1,
-                    }
-                )
-                added_subscription_names.append(subscription['name'])
-                if len(added_subscription_names) == len(needed_subscription_names):
-                    break
-        missing_subscription_names = set(needed_subscription_names).difference(
-            set(added_subscription_names)
-        )
-        if missing_subscription_names:
-            raise CLIFactoryError(f'Missing subscriptions: {missing_subscription_names}')
         data = dict(
             activation_key=activation_key,
             content_view=content_view,

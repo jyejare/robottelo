@@ -11,6 +11,7 @@
 :CaseImportance: High
 
 """
+
 import os
 from time import sleep
 
@@ -129,7 +130,7 @@ def configure_hammer_session(parametrized_enrolled_sat, enable=True):
 
 def generate_otp(secret):
     """Return the time_based_otp"""
-    time_otp = pyotp.TOTP(secret)
+    time_otp = pyotp.TOTP(secret, digest='SHA1', digits=6, interval=120)
     return time_otp.now()
 
 
@@ -160,11 +161,13 @@ def test_positive_create_with_https(
     if auth_data['auth_type'] == 'ipa':
         set_certificate_in_satellite(server_type='IPA', sat=module_target_sat)
         username = settings.ipa.user
+        account_name = auth_data['ldap_user_cn']
     else:
         set_certificate_in_satellite(
             server_type='AD', sat=module_target_sat, hostname=auth_data['ldap_hostname']
         )
         username = settings.ldap.username
+        account_name = f"cn={auth_data['ldap_user_cn']},{auth_data['base_dn']}"
     org = module_target_sat.api.Organization().create()
     loc = module_target_sat.api.Location().create()
     ldap_auth_name = gen_string('alphanumeric')
@@ -176,7 +179,7 @@ def test_positive_create_with_https(
                 'ldap_server.host': auth_data['ldap_hostname'],
                 'ldap_server.ldaps': True,
                 'ldap_server.server_type': auth_data['server_type'],
-                'account.account_name': auth_data['ldap_user_cn'],
+                'account.account_name': account_name,
                 'account.password': auth_data['ldap_user_passwd'],
                 'account.base_dn': auth_data['base_dn'],
                 'account.groups_base_dn': auth_data['group_base_dn'],
@@ -196,9 +199,12 @@ def test_positive_create_with_https(
         assert ldap_source['ldap_server']['name'] == ldap_auth_name
         assert ldap_source['ldap_server']['host'] == auth_data['ldap_hostname']
         assert ldap_source['ldap_server']['port'] == '636'
-    with module_target_sat.ui_session(
-        test_name, username, auth_data['ldap_user_passwd']
-    ) as ldapsession, pytest.raises(NavigationTriesExceeded):
+    with (
+        module_target_sat.ui_session(
+            test_name, username, auth_data['ldap_user_passwd']
+        ) as ldapsession,
+        pytest.raises(NavigationTriesExceeded),
+    ):
         ldapsession.user.search('')
     assert module_target_sat.api.User().search(query={'search': f'login="{username}"'})
 
@@ -327,7 +333,9 @@ def test_session_expire_rhsso_idle_timeout(
         session.rhsso_login.login(
             {'username': settings.rhsso.rhsso_user, 'password': settings.rhsso.rhsso_password}
         )
-        sleep(60)
+        sleep(
+            150
+        )  # give the browser some time to actually logout, even though Satellite should terminate session after one minute
         with pytest.raises(NavigationTriesExceeded) as error:
             session.task.read_all(widget_names='current_user')['current_user']
         assert error.typename == 'NavigationTriesExceeded'
@@ -563,7 +571,9 @@ def test_user_permissions_rhsso_user_multiple_group(
         assert login_details['username'] in current_user
 
 
-def test_totp_user_login(ad_data, module_target_sat):
+def test_totp_user_login(
+    enable_external_auth_rhsso, rhsso_setting_setup, ad_data, module_target_sat
+):
     """Verify the TOTP authentication of LDAP user interlinked with RH-SSO
 
     :id: cf8dfa00-4f48-11eb-b7d5-d46d6dd3b5b2
@@ -765,44 +775,54 @@ def test_positive_negotiate_CRUD(
     result = parametrized_enrolled_sat.execute(f'echo {password} | kinit {user}')
     assert result.status == 0
 
-    # Add the permissions for CRUD operations
-    user = parametrized_enrolled_sat.api.User().search(query={'search': f'login={user.lower()}'})[0]
-    role = parametrized_enrolled_sat.api.Role().search(query={'search': 'name="Manager"'})[0]
-    user.role = [role]
-    user.update(['role'])
+    result = parametrized_enrolled_sat.cli.Auth.logout()
+    assert 'Logged out.' in result[0]['message']
+    with parametrized_enrolled_sat.omit_credentials():
+        # Create a user in Satellite by running any command (using the Kerberos ticket)
+        with pytest.raises(CLIReturnCodeError):
+            result = parametrized_enrolled_sat.cli.Architecture.list()
 
-    # Check that listing and automatic login on first hammer
-    # command (when Kerberos ticket exists) succeeds.
-    result = parametrized_enrolled_sat.cli.Architecture.list()
-    assert len(result)
-    result = parametrized_enrolled_sat.cli.Auth.status()
-    assert SESSION_OK in str(result)
+        # Add the permissions for CRUD operations
+        user = parametrized_enrolled_sat.api.User().search(
+            query={'search': f'login={user.lower()}'}
+        )[0]
+        role = parametrized_enrolled_sat.api.Role().search(query={'search': 'name="Manager"'})[0]
+        user.role = [role]
+        user.update(['role'])
 
-    # Create
-    name = gen_string('alphanumeric')
-    arch = parametrized_enrolled_sat.cli.Architecture.create({'name': name})
+        # Check that listing succeeds.
+        result = parametrized_enrolled_sat.cli.Architecture.list()
+        assert len(result)
+        result = parametrized_enrolled_sat.cli.Auth.status()
+        assert SESSION_OK in str(result)
 
-    # Read
-    arch_read = parametrized_enrolled_sat.cli.Architecture.info({'name': name})
-    assert arch_read == arch
+        # Create
+        name = gen_string('alphanumeric')
+        arch = parametrized_enrolled_sat.cli.Architecture.create({'name': name})
 
-    # Update
-    new_name = gen_string('alphanumeric')
-    result = parametrized_enrolled_sat.cli.Architecture.update({'name': name, 'new-name': new_name})
-    assert 'updated' in str(result)
-    arch_read = parametrized_enrolled_sat.cli.Architecture.info({'name': new_name})
-    assert arch_read['name'] == new_name
+        # Read
+        arch_read = parametrized_enrolled_sat.cli.Architecture.info({'name': name})
+        assert arch_read == arch
 
-    # Delete
-    result = parametrized_enrolled_sat.cli.Architecture.delete({'name': new_name})
-    assert 'deleted' in result
-    with pytest.raises(CLIReturnCodeError) as context:
-        parametrized_enrolled_sat.cli.Architecture.info({'name': new_name})
-    assert 'not found' in context.value.message
+        # Update
+        new_name = gen_string('alphanumeric')
+        result = parametrized_enrolled_sat.cli.Architecture.update(
+            {'name': name, 'new-name': new_name}
+        )
+        assert 'updated' in str(result)
+        arch_read = parametrized_enrolled_sat.cli.Architecture.info({'name': new_name})
+        assert arch_read['name'] == new_name
 
-    # Remove the permissions
-    user.role = []
-    user.update(['role'])
+        # Delete
+        result = parametrized_enrolled_sat.cli.Architecture.delete({'name': new_name})
+        assert 'deleted' in result
+        with pytest.raises(CLIReturnCodeError) as context:
+            parametrized_enrolled_sat.cli.Architecture.info({'name': new_name})
+        assert 'not found' in context.value.message
+
+        # Remove the permissions
+        user.role = []
+        user.update(['role'])
 
 
 def test_positive_negotiate_logout(

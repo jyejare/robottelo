@@ -20,6 +20,7 @@ Subcommands::
     info                          Show a content view
     list                          List content views
     publish                       Publish a content view
+    purge                         Delete old versions of a content view
     remove                        Remove versions and/or environments from a
                                   content view and reassign systems and keys
     remove-from-environment       Remove a content view from an environment
@@ -33,6 +34,7 @@ Options::
 
     -h, --help                    print help
 """
+
 from robottelo.cli import hammer
 from robottelo.cli.base import Base, CLIError
 
@@ -43,7 +45,7 @@ class ContentViewFilterRule(Base):
     command_base = 'content-view filter rule'
 
     @classmethod
-    def create(cls, options=None):
+    def create(cls, options=None, timeout=None):
         """Create a content-view filter rule"""
         if (
             not options
@@ -55,7 +57,7 @@ class ContentViewFilterRule(Base):
                 ' "content-view-filter" or "content-view-filter-id".'
             )
         cls.command_sub = 'create'
-        result = cls.execute(cls._construct_command(options), output_format='csv')
+        result = cls.execute(cls._construct_command(options), output_format='csv', timeout=timeout)
 
         # Extract new CV filter rule ID if it was successfully created
         if len(result) > 0 and 'id' in result[0]:
@@ -113,6 +115,12 @@ class ContentView(Base):
         return cls.execute(cls._construct_command(options), ignore_stderr=True, timeout=timeout)
 
     @classmethod
+    def purge(cls, options, timeout='25m'):
+        """Purges old versions of content-view. Defaults to keeping 3"""
+        cls.command_sub = 'purge'
+        return cls.execute(cls._construct_command(options), ignore_stderr=True, timeout=timeout)
+
+    @classmethod
     def version_info(cls, options, output_format=None):
         """Provides version info related to content-view's version."""
         cls.command_sub = 'version info'
@@ -126,12 +134,12 @@ class ContentView(Base):
         return result
 
     @classmethod
-    def version_incremental_update(cls, options):
+    def version_incremental_update(cls, options, output_format='base'):
         """Performs incremental update of the content-view's version"""
         cls.command_sub = 'version incremental-update'
         if options is None:
             options = {}
-        return cls.execute(cls._construct_command(options), output_format='csv')
+        return cls.execute(cls._construct_command(options), output_format=output_format)
 
     @classmethod
     def version_list(cls, options):
@@ -172,6 +180,12 @@ class ContentView(Base):
         return cls.execute(cls._construct_command(options), ignore_stderr=True)
 
     @classmethod
+    def version_verify_checksum(cls, options):
+        """Verify checksum of repository contents in the content view version."""
+        cls.command_sub = 'version verify-checksum'
+        return cls.execute(cls._construct_command(options), ignore_stderr=True)
+
+    @classmethod
     def remove_from_environment(cls, options=None):
         """Remove content-view from an environment"""
         cls.command_sub = 'remove-from-environment'
@@ -207,4 +221,10 @@ class ContentView(Base):
     def component_list(cls, options=None):
         """List components attached to the content view"""
         cls.command_sub = 'component list'
+        return cls.execute(cls._construct_command(options), output_format='csv')
+
+    @classmethod
+    def list(cls, options=None):
+        """List information about content views"""
+        cls.command_sub = 'list'
         return cls.execute(cls._construct_command(options), output_format='csv')

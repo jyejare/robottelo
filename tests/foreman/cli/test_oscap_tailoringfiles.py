@@ -11,6 +11,7 @@
 :CaseAutomation: Automated
 
 """
+
 from fauxfactory import gen_string
 import pytest
 
@@ -182,10 +183,8 @@ class TestTailoringFiles:
         :CaseImportance: Medium
         """
 
-    @pytest.mark.skip_if_open("BZ:1857572")
     @pytest.mark.tier2
     def test_positive_download_tailoring_file(self, tailoring_file_path, target_sat):
-
         """Download the tailoring file from satellite
 
         :id: 75d8c810-19a7-4285-bc3a-a1fb1a0e9088
@@ -240,8 +239,6 @@ class TestTailoringFiles:
 
     @pytest.mark.stubbed
     @pytest.mark.tier4
-    @pytest.mark.pit_server
-    @pytest.mark.pit_client
     @pytest.mark.upgrade
     def test_positive_oscap_run_with_tailoring_file_and_capsule(self):
         """End-to-End Oscap run with tailoring files and default capsule

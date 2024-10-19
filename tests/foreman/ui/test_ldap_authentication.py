@@ -11,6 +11,7 @@
 :CaseImportance: High
 
 """
+
 import os
 
 from fauxfactory import gen_url
@@ -275,7 +276,7 @@ def test_positive_add_katello_role(
         session.activationkey.create({'name': ak_name})
         assert session.activationkey.search(ak_name)[0]['Name'] == ak_name
         current_user = session.activationkey.read(ak_name, 'current_user')['current_user']
-        assert ldap_data['ldap_user_name'] in current_user
+        assert f"{auth_source.attr_firstname} {auth_source.attr_lastname}" in current_user
 
 
 @pytest.mark.parametrize('ldap_auth_source', ['AD', 'IPA'], indirect=True)
@@ -344,7 +345,7 @@ def test_positive_update_external_roles(
         session.activationkey.create({'name': ak_name})
         assert session.activationkey.search(ak_name)[0]['Name'] == ak_name
         current_user = session.activationkey.read(ak_name, 'current_user')['current_user']
-        assert ldap_data['ldap_user_name'] in current_user
+        assert ldap_data['ldap_user_shown_name'] == current_user
 
 
 @pytest.mark.parametrize('ldap_auth_source', ['AD', 'IPA'], indirect=True)
@@ -404,9 +405,12 @@ def test_positive_delete_external_roles(
         session.usergroup.update(
             ldap_usergroup_name, {'roles.resources.unassigned': [foreman_role.name]}
         )
-    with target_sat.ui_session(
-        test_name, ldap_data['ldap_user_name'], ldap_data['ldap_user_passwd']
-    ) as ldapsession, pytest.raises(NavigationTriesExceeded):
+    with (
+        target_sat.ui_session(
+            test_name, ldap_data['ldap_user_name'], ldap_data['ldap_user_passwd']
+        ) as ldapsession,
+        pytest.raises(NavigationTriesExceeded),
+    ):
         ldapsession.location.create({'name': gen_string('alpha')})
 
 
@@ -476,13 +480,13 @@ def test_positive_update_external_user_roles(
         )
     with target_sat.ui_session(
         test_name, ldap_data['ldap_user_name'], ldap_data['ldap_user_passwd']
-    ) as session:
+    ) as ldapsession:
         with pytest.raises(NavigationTriesExceeded):
             ldapsession.architecture.search('')
-        session.activationkey.create({'name': ak_name})
-        assert session.activationkey.search(ak_name)[0]['Name'] == ak_name
-        current_user = session.activationkey.read(ak_name, 'current_user')['current_user']
-        assert ldap_data['ldap_user_name'] in current_user
+        ldapsession.activationkey.create({'name': ak_name})
+        assert ldapsession.activationkey.search(ak_name)[0]['Name'] == ak_name
+        current_user = ldapsession.activationkey.read(ak_name, 'current_user')['current_user']
+        assert ldap_data['ldap_user_shown_name'] == current_user
 
 
 @pytest.mark.parametrize('ldap_auth_source', ['AD', 'IPA'], indirect=True)
@@ -537,7 +541,7 @@ def test_positive_add_admin_role_with_org_loc(
         session.location.create({'name': location_name})
         assert session.location.search(location_name)[0]['Name'] == location_name
         location = session.location.read(location_name, ['current_user', 'primary'])
-        assert ldap_data['ldap_user_name'] in location['current_user']
+        assert ldap_data['ldap_user_shown_name'] in location['current_user']
         assert location['primary']['name'] == location_name
         session.organization.select(module_org.name)
         session.activationkey.create({'name': ak_name})
@@ -709,7 +713,7 @@ def test_positive_create_user_in_ldap_mode(session, ldap_auth_source, ldap_tear_
         assert user_values['user']['auth'] == auth_source_name
 
 
-@pytest.mark.parametrize('ldap_auth_source', ['AD', 'IPA'], indirect=True)
+@pytest.mark.parametrize('ldap_auth_source', ['AD', 'IPA', 'OPENLDAP'], indirect=True)
 @pytest.mark.tier2
 def test_positive_login_user_no_roles(test_name, ldap_tear_down, ldap_auth_source, target_sat):
     """Login with LDAP Auth for user with no roles/rights
@@ -758,9 +762,12 @@ def test_positive_login_user_basic_roles(
     role = target_sat.api.Role().create()
     permissions = {'Architecture': PERMISSIONS['Architecture']}
     target_sat.api_factory.create_role_permissions(role, permissions)
-    with target_sat.ui_session(
-        test_name, ldap_data['ldap_user_name'], ldap_data['ldap_user_passwd']
-    ) as ldapsession, pytest.raises(NavigationTriesExceeded):
+    with (
+        target_sat.ui_session(
+            test_name, ldap_data['ldap_user_name'], ldap_data['ldap_user_passwd']
+        ) as ldapsession,
+        pytest.raises(NavigationTriesExceeded),
+    ):
         ldapsession.usergroup.search('')
     with session:
         session.user.update(ldap_data['ldap_user_name'], {'roles.resources.assigned': [role.name]})
@@ -792,9 +799,12 @@ def test_positive_login_user_password_otp(
     otp_pass = (
         f"{default_ipa_host.ldap_user_passwd}{generate_otp(default_ipa_host.time_based_secret)}"
     )
-    with target_sat.ui_session(
-        test_name, default_ipa_host.ipa_otp_username, otp_pass
-    ) as ldapsession, pytest.raises(NavigationTriesExceeded):
+    with (
+        target_sat.ui_session(
+            test_name, default_ipa_host.ipa_otp_username, otp_pass
+        ) as ldapsession,
+        pytest.raises(NavigationTriesExceeded),
+    ):
         ldapsession.user.search('')
     users = target_sat.api.User().search(
         query={'search': f'login="{default_ipa_host.ipa_otp_username}"'}
@@ -1045,7 +1055,6 @@ def test_timeout_and_cac_card_ejection():
 
 @pytest.mark.parametrize('ldap_auth_source', ['AD', 'IPA', 'OPENLDAP'], indirect=True)
 @pytest.mark.tier2
-@pytest.mark.skip_if_open('BZ:1670397')
 def test_verify_attribute_of_users_are_updated(
     session, ldap_auth_source, ldap_tear_down, target_sat
 ):
@@ -1152,7 +1161,6 @@ def test_login_failure_if_internal_user_exist(
         target_sat.api.User(id=user.id).delete()
 
 
-@pytest.mark.skip_if_open("BZ:1812688")
 @pytest.mark.tier2
 def test_userlist_with_external_admin(
     session, auth_source_ipa, ldap_tear_down, groups_teardown, target_sat
@@ -1210,16 +1218,18 @@ def test_userlist_with_external_admin(
         assert idm_user in ldapsession.task.read_all()['current_user']
 
     # verify the users count with local admin and remote/external admin
-    with target_sat.ui_session(
-        user=idm_admin, password=settings.server.ssh_password
-    ) as remote_admin_session, target_sat.ui_session(
-        user=settings.server.admin_username, password=settings.server.admin_password
-    ) as local_admin_session:
+    with (
+        target_sat.ui_session(
+            user=idm_admin, password=settings.server.ssh_password
+        ) as remote_admin_session,
+        target_sat.ui_session(
+            user=settings.server.admin_username, password=settings.server.admin_password
+        ) as local_admin_session,
+    ):
         assert local_admin_session.user.search(idm_user)[0]['Username'] == idm_user
         assert remote_admin_session.user.search(idm_user)[0]['Username'] == idm_user
 
 
-@pytest.mark.skip_if_open('BZ:1883209')
 @pytest.mark.tier2
 def test_positive_group_sync_open_ldap_authsource(
     test_name,

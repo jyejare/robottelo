@@ -39,6 +39,7 @@ Subcommands::
      update                        Update a host
 
 """
+
 from robottelo.cli.base import Base
 
 
@@ -69,6 +70,12 @@ class Host(Base):
     def ansible_roles_remove(cls, options=None):
         """Remove ansible roles"""
         cls.command_sub = 'ansible-roles remove'
+        return cls.execute(cls._construct_command(options), output_format='csv')
+
+    @classmethod
+    def ansible_roles_list(cls, options=None):
+        """Remove ansible list"""
+        cls.command_sub = 'ansible-roles list'
         return cls.execute(cls._construct_command(options), output_format='csv')
 
     @classmethod
@@ -154,6 +161,16 @@ class Host(Base):
             facts = result
 
         return facts
+
+    @classmethod
+    def info(cls, options=None, output_format='json', return_raw_response=None):
+        """Show host info"""
+        cls.command_sub = 'info'
+        return cls.execute(
+            cls._construct_command(options),
+            output_format=output_format,
+            return_raw_response=return_raw_response,
+        )
 
     @classmethod
     def package_install(cls, options):
@@ -478,10 +495,10 @@ class HostInterface(Base):
     command_base = 'host interface'
 
     @classmethod
-    def create(cls, options=None):
+    def create(cls, options=None, timeout=None):
         """Create new network interface for host"""
         cls.command_sub = 'create'
-        cls.execute(cls._construct_command(options), output_format='csv')
+        cls.execute(cls._construct_command(options), output_format='csv', timeout=timeout)
 
 
 class HostTraces(Base):

@@ -11,6 +11,7 @@
 :CaseImportance: High
 
 """
+
 import pytest
 
 from robottelo.constants import OSCAP_PROFILE
@@ -24,8 +25,6 @@ def module_host_group(default_location, default_org, module_target_sat):
     ).create()
 
 
-@pytest.mark.skip_if_open("BZ:2167937")
-@pytest.mark.skip_if_open("BZ:2133151")
 @pytest.mark.tier2
 def test_positive_check_dashboard(
     session,
@@ -100,8 +99,6 @@ def test_positive_check_dashboard(
         # assert policy_details['HostBreakdownChart']['hosts_breakdown'] == '100%Not audited'
 
 
-@pytest.mark.skip_if_open("BZ:2167937")
-@pytest.mark.skip_if_open("BZ:2133151")
 @pytest.mark.tier1
 @pytest.mark.upgrade
 def test_positive_end_to_end(

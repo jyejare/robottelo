@@ -12,6 +12,7 @@
 
 
 """
+
 import re
 
 from fauxfactory import gen_string
@@ -29,9 +30,8 @@ BACKUP_DIR = "/tmp/"
 
 
 BASIC_FILES = {"config_files.tar.gz", ".config.snar", "metadata.yml"}
-OFFLINE_FILES = {"pgsql_data.tar.gz", ".postgres.snar"} | BASIC_FILES
-ONLINE_SAT_FILES = {"candlepin.dump", "foreman.dump", "pulpcore.dump"} | BASIC_FILES
-ONLINE_CAPS_FILES = {"pulpcore.dump"} | BASIC_FILES
+SAT_FILES = {"candlepin.dump", "foreman.dump", "pulpcore.dump"} | BASIC_FILES
+CAPS_FILES = {"pulpcore.dump"} | BASIC_FILES
 CONTENT_FILES = {"pulp_data.tar", ".pulp.snar"}
 
 
@@ -42,19 +42,16 @@ NOPREV_MSG = "ERROR: option '--incremental': Previous backup " "directory does n
 assert_msg = "Some required backup files are missing"
 
 
-def get_exp_files(sat_maintain, backup_type, skip_pulp=False):
-    if type(sat_maintain) is Satellite:
-        # for remote db you get always online backup regardless specified backup type
-        expected_files = (
-            ONLINE_SAT_FILES
-            if backup_type == 'online' or sat_maintain.is_remote_db()
-            else OFFLINE_FILES
-        )
-    else:
-        expected_files = ONLINE_CAPS_FILES if backup_type == 'online' else OFFLINE_FILES
+def get_exp_files(sat_maintain, skip_pulp=False):
+    expected_files = SAT_FILES if type(sat_maintain) is Satellite else CAPS_FILES
     if not skip_pulp:
         expected_files = expected_files | CONTENT_FILES
     return expected_files
+
+
+def get_instance_name(sat_maintain):
+    """Get the instance name depending on target type."""
+    return 'satellite' if type(sat_maintain) is Satellite else 'capsule'
 
 
 @pytest.mark.include_capsule
@@ -92,7 +89,7 @@ def test_positive_backup_preserve_directory(
     files = sat_maintain.execute(f'ls -a {subdir}').stdout.split('\n')
     files = [i for i in files if not re.compile(r'^\.*$').search(i)]
 
-    expected_files = get_exp_files(sat_maintain, backup_type)
+    expected_files = get_exp_files(sat_maintain)
     assert set(files).issuperset(expected_files), assert_msg
 
 
@@ -125,7 +122,7 @@ def test_positive_backup_split_pulp_tar(
     :BZ: 2164413
     """
     subdir = f'{BACKUP_DIR}backup-{gen_string("alpha")}'
-    instance = 'satellite' if type(sat_maintain) is Satellite else 'capsule'
+    instance = get_instance_name(sat_maintain)
     set_size = 100
     result = sat_maintain.cli.Backup.run_backup(
         backup_dir=subdir,
@@ -136,11 +133,11 @@ def test_positive_backup_split_pulp_tar(
     assert 'FAIL' not in result.stdout
 
     # Check for expected files
-    backup_dir = re.findall(fr'{subdir}\/{instance}-backup-.*-[0-5][0-9]', result.stdout)[0]
+    backup_dir = re.findall(rf'{subdir}\/{instance}-backup-.*-[0-5][0-9]', result.stdout)[0]
     files = sat_maintain.execute(f'ls -a {backup_dir}').stdout.split('\n')
     files = [i for i in files if not re.compile(r'^\.*$').search(i)]
 
-    expected_files = get_exp_files(sat_maintain, backup_type)
+    expected_files = get_exp_files(sat_maintain)
     assert set(files).issuperset(expected_files), assert_msg
 
     # Check the split works
@@ -169,7 +166,7 @@ def test_positive_backup_capsule_features(
         2. expected files are present in the backup
     """
     subdir = f'{BACKUP_DIR}backup-{gen_string("alpha")}'
-    instance = 'satellite' if type(sat_maintain) is Satellite else 'capsule'
+    instance = get_instance_name(sat_maintain)
     features = 'dns,tftp,dhcp,openscap'
     result = sat_maintain.cli.Backup.run_backup(
         backup_dir=subdir,
@@ -180,11 +177,11 @@ def test_positive_backup_capsule_features(
     assert 'FAIL' not in result.stdout
 
     # Check for expected files
-    backup_dir = re.findall(fr'{subdir}\/{instance}-backup-.*-[0-5][0-9]', result.stdout)[0]
+    backup_dir = re.findall(rf'{subdir}\/{instance}-backup-.*-[0-5][0-9]', result.stdout)[0]
     files = sat_maintain.execute(f'ls -a {backup_dir}').stdout.split('\n')
     files = [i for i in files if not re.compile(r'^\.*$').search(i)]
 
-    expected_files = get_exp_files(sat_maintain, backup_type)
+    expected_files = get_exp_files(sat_maintain)
     assert set(files).issuperset(expected_files), assert_msg
 
 
@@ -205,7 +202,7 @@ def test_positive_backup_all(sat_maintain, setup_backup_tests, module_synced_rep
         1. both backups succeed
     """
     subdir = f'{BACKUP_DIR}backup-{gen_string("alpha")}'
-    instance = 'satellite' if type(sat_maintain) is Satellite else 'capsule'
+    instance = get_instance_name(sat_maintain)
     sat_maintain.execute(f'mkdir -m 0777 {subdir}')
     result = sat_maintain.cli.Backup.run_backup(
         backup_dir=subdir,
@@ -215,7 +212,7 @@ def test_positive_backup_all(sat_maintain, setup_backup_tests, module_synced_rep
     assert result.status == 0
     assert 'FAIL' not in result.stdout
 
-    init_backup_dir = re.findall(fr'{subdir}\/{instance}-backup-.*-[0-5][0-9]', result.stdout)[0]
+    init_backup_dir = re.findall(rf'{subdir}\/{instance}-backup-.*-[0-5][0-9]', result.stdout)[0]
 
     result = sat_maintain.cli.Backup.run_backup(
         backup_dir=subdir,
@@ -233,47 +230,6 @@ def test_positive_backup_all(sat_maintain, setup_backup_tests, module_synced_rep
     )
     assert result.status == 0
     assert 'FAIL' not in result.stdout
-
-
-@pytest.mark.include_capsule
-def test_positive_backup_offline_logical(sat_maintain, setup_backup_tests, module_synced_repos):
-    """Take an offline backup with '--include-db-dumps' option provided
-
-    :id: dafac83f-75e1-455e-b77f-15fed4eed884
-
-    :parametrized: yes
-
-    :steps:
-        1. create a backup
-        2. check that appropriate files are created
-
-    :expectedresults:
-        1. backup succeeds
-        2. files for both, offline and online, backup type are created
-    """
-    subdir = f'{BACKUP_DIR}backup-{gen_string("alpha")}'
-    instance = 'satellite' if type(sat_maintain) is Satellite else 'capsule'
-    result = sat_maintain.cli.Backup.run_backup(
-        backup_dir=subdir,
-        backup_type='offline',
-        options={'assumeyes': True, 'plaintext': True, 'include-db-dumps': True},
-    )
-    assert result.status == 0
-    assert 'FAIL' not in result.stdout
-
-    # Check for expected files
-    backup_dir = re.findall(fr'{subdir}\/{instance}-backup-.*-[0-5][0-9]', result.stdout)[0]
-    files = sat_maintain.execute(f'ls -a {backup_dir}').stdout.split('\n')
-    files = [i for i in files if not re.compile(r'^\.*$').search(i)]
-
-    if type(sat_maintain) is Satellite:
-        if sat_maintain.is_remote_db():
-            expected_files = ONLINE_SAT_FILES | CONTENT_FILES
-        else:
-            expected_files = OFFLINE_FILES | ONLINE_SAT_FILES | CONTENT_FILES
-    else:
-        expected_files = OFFLINE_FILES | ONLINE_CAPS_FILES | CONTENT_FILES
-    assert set(files).issuperset(expected_files), assert_msg
 
 
 @pytest.mark.include_capsule
@@ -324,39 +280,6 @@ def test_negative_backup_incremental_nodir(sat_maintain, setup_backup_tests, bac
     )
     assert result.status != 0
     assert NOPREV_MSG in str(result.stderr)
-
-
-@pytest.mark.include_capsule
-def test_negative_backup_maintenance_mode(sat_maintain, setup_backup_tests):
-    """Try to take a backup which would fail and verify maintenance-mode isn't running/ON
-
-    :id: dd53c19c-4ebf-11ed-a3d2-932dbdabb055
-
-    :parametrized: yes
-
-    :steps:
-        1. try to create a snapshot backup which would fail
-
-    :expectedresults:
-        1. Verify maintenance-mode isn't running if backup fails
-
-    :BZ: 1908478, 1962842
-
-    :customerscenario: true
-    """
-    subdir = f'{BACKUP_DIR}backup-{gen_string("alpha")}'
-    result = sat_maintain.cli.Backup.run_backup(
-        backup_dir=subdir,
-        backup_type='snapshot',
-        options={'assumeyes': True, 'plaintext': True},
-    )
-    assert result.status != 0
-    assert "Backup didn't finish. Incomplete backup was removed." in result.stdout
-
-    result = sat_maintain.cli.MaintenanceMode.status()
-    assert result.status == 0
-    assert 'Status of maintenance-mode: Off' in result.stdout
-    assert 'Nftables table: absent' in result.stdout
 
 
 @pytest.mark.include_capsule
@@ -425,7 +348,7 @@ def test_positive_puppet_backup_restore(
     sat_maintain.enable_puppet_satellite()
 
     subdir = f'{BACKUP_DIR}backup-{gen_string("alpha")}'
-    instance = 'satellite' if type(sat_maintain) is Satellite else 'capsule'
+    instance = get_instance_name(sat_maintain)
     result = sat_maintain.cli.Backup.run_backup(
         backup_dir=subdir,
         backup_type=backup_type,
@@ -435,11 +358,11 @@ def test_positive_puppet_backup_restore(
     assert 'FAIL' not in result.stdout
 
     # Check for expected files
-    backup_dir = re.findall(fr'{subdir}\/{instance}-backup-.*-[0-5][0-9]', result.stdout)[0]
+    backup_dir = re.findall(rf'{subdir}\/{instance}-backup-.*-[0-5][0-9]', result.stdout)[0]
     files = sat_maintain.execute(f'ls -a {backup_dir}').stdout.split('\n')
     files = [i for i in files if not re.compile(r'^\.*$').search(i)]
 
-    expected_files = get_exp_files(sat_maintain, backup_type)
+    expected_files = get_exp_files(sat_maintain)
     assert set(files).issuperset(expected_files), assert_msg
 
     # Run restore
@@ -478,8 +401,8 @@ def test_positive_puppet_backup_restore(
 @pytest.mark.parametrize('backup_type', ['online', 'offline'])
 def test_positive_backup_restore(
     sat_maintain,
-    session_target_sat,
-    session_capsule_configured,
+    module_target_sat,
+    module_capsule_configured,
     setup_backup_tests,
     module_synced_repos,
     backup_type,
@@ -507,10 +430,12 @@ def test_positive_backup_restore(
 
     :customerscenario: true
 
+    :Verifies: SAT-23093
+
     :BZ: 2172540, 1978764, 1979045
     """
     subdir = f'{BACKUP_DIR}backup-{gen_string("alpha")}'
-    instance = 'satellite' if type(sat_maintain) is Satellite else 'capsule'
+    instance = get_instance_name(sat_maintain)
     result = sat_maintain.cli.Backup.run_backup(
         backup_dir=subdir,
         backup_type=backup_type,
@@ -521,12 +446,19 @@ def test_positive_backup_restore(
     assert 'FAIL' not in result.stdout
 
     # Check for expected files
-    backup_dir = re.findall(fr'{subdir}\/{instance}-backup-.*-[0-5][0-9]', result.stdout)[0]
+    backup_dir = re.findall(rf'{subdir}\/{instance}-backup-.*-[0-5][0-9]', result.stdout)[0]
     files = sat_maintain.execute(f'ls -a {backup_dir}').stdout.split('\n')
     files = [i for i in files if not re.compile(r'^\.*$').search(i)]
 
-    expected_files = get_exp_files(sat_maintain, backup_type, skip_pulp)
+    expected_files = get_exp_files(sat_maintain, skip_pulp)
     assert set(files).issuperset(expected_files), assert_msg
+
+    # Check if certificate tar file is present in Capsule backup.
+    if instance == 'capsule':
+        cert_file = sat_maintain.execute(
+            f'tar -tvf {backup_dir}/config_files.tar.gz | grep {sat_maintain.hostname}'
+        ).stdout
+        assert f'{sat_maintain.hostname}-certs.tar' in cert_file
 
     # Run restore
     if not skip_pulp:
@@ -561,7 +493,7 @@ def test_positive_backup_restore(
         assert rh_repo.id == module_synced_repos['rh'].id
     else:
         repo_path = module_synced_repos['custom'].full_path.replace(
-            session_target_sat.hostname, session_capsule_configured.hostname
+            module_target_sat.hostname, module_capsule_configured.hostname
         )
         repo_files = get_repo_files_by_url(repo_path)
         assert len(repo_files) == constants.FAKE_0_YUM_REPO_PACKAGES_COUNT
@@ -596,6 +528,7 @@ def test_positive_backup_restore_incremental(
         5. system health check succeeds
         6. content is present after restore
     """
+    instance = get_instance_name(sat_maintain)
     subdir = f'{BACKUP_DIR}backup-{gen_string("alpha")}'
     result = sat_maintain.cli.Backup.run_backup(
         backup_dir=subdir,
@@ -605,7 +538,7 @@ def test_positive_backup_restore_incremental(
     assert result.status == 0
     assert 'FAIL' not in result.stdout
 
-    init_backup_dir = re.findall(fr'{subdir}\/satellite-backup-.*-[0-5][0-9]', result.stdout)[0]
+    init_backup_dir = re.findall(rf'{subdir}\/{instance}-backup-.*-[0-5][0-9]', result.stdout)[0]
 
     # create additional content
     secondary_repo = sat_maintain.api.Repository(
@@ -624,11 +557,11 @@ def test_positive_backup_restore_incremental(
     assert 'FAIL' not in result.stdout
 
     # check for expected files
-    inc_backup_dir = re.findall(fr'{subdir}\/satellite-backup-.*-[0-5][0-9]', result.stdout)[0]
+    inc_backup_dir = re.findall(rf'{subdir}\/{instance}-backup-.*-[0-5][0-9]', result.stdout)[0]
     files = sat_maintain.execute(f'ls -a {inc_backup_dir}').stdout.split('\n')
     files = [i for i in files if not re.compile(r'^\.*$').search(i)]
 
-    expected_files = get_exp_files(sat_maintain, backup_type)
+    expected_files = get_exp_files(sat_maintain)
     assert set(files).issuperset(expected_files), assert_msg
 
     # restore initial backup and check system health

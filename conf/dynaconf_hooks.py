@@ -7,12 +7,16 @@ from box import Box
 
 from robottelo.logging import logger
 from robottelo.utils.ohsnap import dogfood_repository
-from robottelo.utils.url import is_url
+from robottelo.utils.url import ipv6_hostname_translation, is_url
 
 
 def post(settings):
-    settings_cache_path = Path(f'settings_cache-{settings.server.version.release}.json')
-    if getattr(settings.robottelo.settings, 'get_fresh', True):
+    settings_cache_path = Path(
+        f'settings_cache-{settings.server.version.release}-{settings.server.version.snap}.json'
+    )
+    if settings.server.version.source == 'nightly':
+        data = Box({'REPOS': {}})
+    elif getattr(settings.robottelo.settings, 'get_fresh', True):
         data = get_repos_config(settings)
         write_cache(settings_cache_path, data)
     else:
@@ -26,6 +30,7 @@ def post(settings):
             )
             data = get_repos_config(settings)
             write_cache(settings_cache_path, data)
+    ipv6_hostname_translation(settings, data)
     config_migrations(settings, data)
     data['dynaconf_merge'] = True
     return data
@@ -52,7 +57,7 @@ def config_migrations(settings, data):
     :type data: dict
     """
     logger.info('Running config migration hooks')
-    sys.path.append(str(Path(__file__).parent))
+    sys.path.append(str(Path(__file__).parent.parent))
     from conf import migrations
 
     migration_functions = [

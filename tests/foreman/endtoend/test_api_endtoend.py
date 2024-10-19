@@ -11,13 +11,14 @@
 :CaseImportance: High
 
 """
+
 from collections import defaultdict
 import http
 from pprint import pformat
 
 from deepdiff import DeepDiff
 from fauxfactory import gen_string
-from nailgun import client, entities
+from nailgun import client
 import pytest
 
 from robottelo import constants
@@ -29,10 +30,8 @@ from robottelo.config import (
     user_nailgun_config,
 )
 from robottelo.constants.repos import CUSTOM_RPM_REPO
-from robottelo.utils.issue_handlers import is_open
 
 API_PATHS = {
-    # flake8:noqa (line-too-long)
     'activation_keys': (
         '/katello/api/activation_keys',
         '/katello/api/activation_keys',
@@ -157,6 +156,7 @@ API_PATHS = {
         '/katello/api/capsules/:id/content/sync',
         '/katello/api/capsules/:id/content/sync',
         '/katello/api/capsules/:id/content/reclaim_space',
+        '/katello/api/capsules/:id/content/verify_checksum',
     ),
     'capsules': ('/katello/api/capsules', '/katello/api/capsules/:id'),
     'common_parameters': (
@@ -296,6 +296,7 @@ API_PATHS = {
         '/katello/api/content_view_versions/:id/promote',
         '/katello/api/content_view_versions/:id/republish_repositories',
         '/katello/api/content_view_versions/incremental_update',
+        '/katello/api/content_view_versions/:id/verify_checksum',
     ),
     'dashboard': ('/api/dashboard',),
     'debs': ('/katello/api/debs/:id', '/katello/api/debs/compare'),
@@ -405,6 +406,7 @@ API_PATHS = {
         '/api/hosts/:host_id/subscriptions',
         '/api/hosts/:host_id/subscriptions',
         '/api/hosts/:host_id/subscriptions/add_subscriptions',
+        '/api/hosts/:host_id/subscriptions/remove_subscriptions',
         '/api/hosts/:host_id/subscriptions/auto_attach',
         '/api/hosts/:host_id/subscriptions/available_release_versions',
         '/api/hosts/:host_id/subscriptions/enabled_repositories',
@@ -461,6 +463,8 @@ API_PATHS = {
     ),
     'hosts_bulk_actions': (
         '/api/hosts/bulk',
+        '/api/hosts/bulk/build',
+        '/api/hosts/bulk/reassign_hostgroups',
         '/api/hosts/bulk/add_host_collections',
         '/api/hosts/bulk/remove_host_collections',
         '/api/hosts/bulk/add_subscriptions',
@@ -607,30 +611,15 @@ API_PATHS = {
         '/api/operatingsystems/:operatingsystem_id/os_default_templates/:id',
         '/api/operatingsystems/:operatingsystem_id/os_default_templates/:id',
     ),
-    'oval_contents': (
-        '/api/compliance/oval_contents',
-        '/api/compliance/oval_contents/:id',
-        '/api/compliance/oval_contents',
-        '/api/compliance/oval_contents/:id',
-        '/api/compliance/oval_contents/:id',
-        '/api/compliance/oval_contents/sync',
-    ),
-    'oval_policies': (
-        '/api/compliance/oval_policies',
-        '/api/compliance/oval_policies/:id',
-        '/api/compliance/oval_policies',
-        '/api/compliance/oval_policies/:id',
-        '/api/compliance/oval_policies/:id',
-        '/api/compliance/oval_policies/:id/assign_hostgroups',
-        '/api/compliance/oval_policies/:id/assign_hosts',
-        '/api/compliance/oval_policies/:id/oval_content',
-    ),
-    'oval_reports': ('/api/compliance/oval_reports/:cname/:oval_policy_id/:date',),
     'package_groups': (
         '/katello/api/package_groups/:id',
         '/katello/api/package_groups/compare',
     ),
-    'packages': ('/katello/api/packages/:id', '/katello/api/packages/compare'),
+    'packages': (
+        '/katello/api/packages/:id',
+        '/katello/api/packages/compare',
+        '/katello/api/packages/thindex',
+    ),
     'parameters': (
         '/api/hosts/:host_id/parameters',
         '/api/hosts/:host_id/parameters',
@@ -643,6 +632,7 @@ API_PATHS = {
         '/api/permissions',
         '/api/permissions/:id',
         '/api/permissions/resource_types',
+        '/api/permissions/current_permissions',
     ),
     'personal_access_tokens': (
         '/api/users/:user_id/personal_access_tokens',
@@ -722,12 +712,7 @@ API_PATHS = {
         '/api/api/hosts/:id/available_remote_execution_features',
     ),
     'scap_content_profiles': ('/api/compliance/scap_content_profiles',),
-    'simple_content_access': (
-        '/katello/api/organizations/:organization_id/simple_content_access/eligible',
-        '/katello/api/organizations/:organization_id/simple_content_access/enable',
-        '/katello/api/organizations/:organization_id/simple_content_access/disable',
-        '/katello/api/organizations/:organization_id/simple_content_access/status',
-    ),
+    'simple_content_access': (),
     'registration': ('/api/register', '/api/register'),
     'registration_commands': ('/api/registration_commands',),
     'report_templates': (
@@ -922,10 +907,6 @@ API_PATHS = {
 def filtered_api_paths():
     """Filter the API_PATHS dict based on BZs that impact various endpoints"""
     missing = defaultdict(list)
-    if is_open('BZ:1887932'):
-        missing['subscriptions'].append(
-            '/katello/api/activation_keys/:activation_key_id/subscriptions'
-        )
     filtered_paths = API_PATHS.copy()
     for endpoint, missing_paths in missing.items():
         filtered_paths[endpoint] = tuple(
@@ -1005,39 +986,41 @@ class TestEndToEnd:
     def fake_manifest_is_set(self):
         return setting_is_set('fake_manifest')
 
-    def test_positive_find_default_org(self):
+    def test_positive_find_default_org(self, class_target_sat):
         """Check if 'Default Organization' is present
 
         :id: c6e45b36-d8b6-4507-8dcd-0645668496b9
 
         :expectedresults: 'Default Organization' is found
         """
-        results = entities.Organization().search(
+        results = class_target_sat.api.Organization().search(
             query={'search': f'name="{constants.DEFAULT_ORG}"'}
         )
         assert len(results) == 1
         assert results[0].name == constants.DEFAULT_ORG
 
-    def test_positive_find_default_loc(self):
+    def test_positive_find_default_loc(self, class_target_sat):
         """Check if 'Default Location' is present
 
         :id: 1f40b3c6-488d-4037-a7ab-250a02bf919a
 
         :expectedresults: 'Default Location' is found
         """
-        results = entities.Location().search(query={'search': f'name="{constants.DEFAULT_LOC}"'})
+        results = class_target_sat.api.Location().search(
+            query={'search': f'name="{constants.DEFAULT_LOC}"'}
+        )
         assert len(results) == 1
         assert results[0].name == constants.DEFAULT_LOC
 
     @pytest.mark.build_sanity
-    def test_positive_find_admin_user(self):
+    def test_positive_find_admin_user(self, class_target_sat):
         """Check if Admin User is present
 
         :id: 892fdfcd-18c0-42ef-988b-f13a04097f5c
 
         :expectedresults: Admin User is found and has Admin role
         """
-        results = entities.User().search(query={'search': 'login=admin'})
+        results = class_target_sat.api.User().search(query={'search': 'login=admin'})
         assert len(results) == 1
         assert results[0].login == 'admin'
 
@@ -1050,7 +1033,7 @@ class TestEndToEnd:
     @pytest.mark.skipif(
         (not settings.robottelo.REPOS_HOSTING_URL), reason='Missing repos_hosting_url'
     )
-    def test_positive_end_to_end(self, function_entitlement_manifest, target_sat, rhel_contenthost):
+    def test_positive_end_to_end(self, function_sca_manifest, target_sat, rhel_contenthost):
         """Perform end to end smoke tests using RH and custom repos.
 
         1. Create a new user with admin permissions
@@ -1091,10 +1074,9 @@ class TestEndToEnd:
         # step 2.1: Create a new organization
         user_cfg = user_nailgun_config(login, password)
         org = target_sat.api.Organization(server_config=user_cfg).create()
-        org.sca_disable()
 
         # step 2.2: Upload manifest
-        target_sat.upload_manifest(org.id, function_entitlement_manifest.content)
+        target_sat.upload_manifest(org.id, function_sca_manifest.content)
 
         # step 2.3: Create a new lifecycle environment
         le1 = target_sat.api.LifecycleEnvironment(server_config=user_cfg, organization=org).create()
@@ -1152,12 +1134,7 @@ class TestEndToEnd:
             name=activation_key_name, environment=le1, organization=org, content_view=content_view
         ).create()
 
-        # step 2.13: Add the products to the activation key
-        for sub in target_sat.api.Subscription(organization=org).search():
-            if sub.name == constants.DEFAULT_SUBSCRIPTION_NAME:
-                activation_key.add_subscriptions(data={'quantity': 1, 'subscription_id': sub.id})
-                break
-        # step 2.13.1: Enable product content
+        # step 2.13: Enable product content
         activation_key.content_override(
             data={
                 'content_overrides': [
@@ -1208,9 +1185,8 @@ class TestEndToEnd:
         # step 2.18: Provision a client
         # TODO this isn't provisioning through satellite as intended
         # Note it wasn't well before the change that added this todo
-        rhel_contenthost.install_katello_ca(target_sat)
         # Register client with foreman server using act keys
-        rhel_contenthost.register_contenthost(org.label, activation_key_name)
+        rhel_contenthost.register(org, None, activation_key.name, target_sat)
         assert rhel_contenthost.subscribed
         # Install rpm on client
         package_name = 'katello-agent'

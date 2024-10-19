@@ -11,6 +11,7 @@
 :CaseImportance: High
 
 """
+
 import pytest
 
 from robottelo.config import settings
@@ -51,6 +52,7 @@ def capsule_default_org(module_target_sat, module_capsule_configured, default_or
     ],
     indirect=True,
 )
+@pytest.mark.pit_client
 def test_positive_content_counts_for_mixed_cv(
     target_sat,
     module_capsule_configured,

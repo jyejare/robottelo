@@ -11,14 +11,18 @@
 :Team: Rocket
 
 """
-import re
 
-from fauxfactory import gen_string
+import json
+import re
+from tempfile import mkstemp
+
+from fauxfactory import gen_mac, gen_string
 import pytest
 
 from robottelo.config import settings
 from robottelo.constants import CLIENT_PORT
 from robottelo.exceptions import CLIReturnCodeError
+from robottelo.utils.issue_handlers import is_open
 
 pytestmark = pytest.mark.tier1
 
@@ -39,20 +43,29 @@ def test_host_registration_end_to_end(
 
     :steps:
         1. Register host with global registration template to Satellite and Capsule
+        2. Check the host is registered and verify host owner name
 
-    :expectedresults: Host registered successfully
+    :expectedresults: Host registered successfully with valid owner name
 
-    :BZ: 2156926
+    :verifies: SAT-21682, SAT-14716
 
     :customerscenario: true
     """
     org = module_sca_manifest_org
     result = rhel_contenthost.register(
-        org, module_location, [module_activation_key.name], module_target_sat
+        org, module_location, module_activation_key.name, module_target_sat
     )
 
     rc = 1 if rhel_contenthost.os_version.major == 6 else 0
     assert result.status == rc, f'Failed to register host: {result.stderr}'
+
+    owner_name = module_target_sat.cli.Host.info(
+        options={'name': rhel_contenthost.hostname, 'fields': 'Additional info/owner'}
+    )
+    # Verify host owner name set correctly
+    assert 'Admin User' in owner_name['additional-info']['owner']['name'], (
+        f'Host owner name is incorrect: ' f'{owner_name["additional-info"]["owner"]["name"]}'
+    )
 
     # Verify server.hostname and server.port from subscription-manager config
     assert module_target_sat.hostname == rhel_contenthost.subscription_config['server']['hostname']
@@ -69,12 +82,20 @@ def test_host_registration_end_to_end(
     result = rhel_contenthost.register(
         org,
         module_location,
-        [module_activation_key.name],
+        module_activation_key.name,
         module_capsule_configured,
         force=True,
     )
     rc = 1 if rhel_contenthost.os_version.major == 6 else 0
     assert result.status == rc, f'Failed to register host: {result.stderr}'
+
+    owner_name = module_target_sat.cli.Host.info(
+        options={'name': rhel_contenthost.hostname, 'fields': 'Additional info/owner'}
+    )
+    # Verify capsule host owner name set correctly
+    assert 'Admin User' in owner_name['additional-info']['owner']['name'], (
+        f'Host owner name is incorrect: ' f'{owner_name["additional-info"]["owner"]["name"]}'
+    )
 
     # Verify server.hostname and server.port from subscription-manager config
     assert (
@@ -203,9 +224,9 @@ def test_positive_force_register_twice(module_ak_with_cv, module_org, rhel_conte
     assert f'The system has been registered with ID: {reg_id_new}' in str(result.stdout)
     assert reg_id_new != reg_id_old
     assert (
-        target_sat.cli.Host.info({'name': rhel_contenthost.hostname})['subscription-information'][
-            'uuid'
-        ]
+        target_sat.cli.Host.info({'name': rhel_contenthost.hostname}, output_format='json')[
+            'subscription-information'
+        ]['uuid']
         == reg_id_new
     )
 
@@ -224,3 +245,92 @@ def test_negative_global_registration_without_ak(module_target_sat):
         'Failed to generate registration command:\n  Missing activation key!'
         in context.value.message
     )
+
+
+@pytest.mark.rhel_ver_match('8')
+def test_positive_custom_facts_for_host_registration(
+    module_sca_manifest_org,
+    module_location,
+    module_target_sat,
+    rhel_contenthost,
+    module_activation_key,
+):
+    """Attempt to register a host and check all the interfaces are created from the custom facts
+
+    :id: db73c146-4557-4bf4-a8e2-950ecba31620
+
+    :steps:
+        1. Register the host.
+        2. Check the host is registered and all the interfaces are created successfully.
+
+    :expectedresults: Host registered successfully with all interfaces created from the custom facts.
+
+    :BZ: 2250397
+
+    :customerscenario: true
+    """
+    interfaces = [
+        {'name': gen_string('alphanumeric')},
+        {'name': 'enp98s0f0', 'mac': gen_mac(multicast=False)},
+        {'name': 'Datos', 'vlan_id': gen_string('numeric', 4)},
+        {'name': 'bondBk', 'vlan_id': gen_string('numeric', 4)},
+    ]
+    facts = {
+        f'net.interface.{interfaces[0]["name"]}.mac_address': gen_mac(),
+        f'net.interface.{interfaces[1]["name"]}.mac_address': interfaces[1]["mac"],
+        f'net.interface.{interfaces[2]["name"]}.{interfaces[2]["vlan_id"]}.mac_address': gen_mac(),
+        f'net.interface.{interfaces[3]["name"]}.{interfaces[3]["vlan_id"]}.mac_address': gen_mac(),
+    }
+    _, facts_file = mkstemp(suffix='.facts')
+    with open(facts_file, 'w') as f:
+        json.dump(facts, f, indent=4)
+    rhel_contenthost.put(facts_file, '/etc/rhsm/facts/')
+    result = rhel_contenthost.register(
+        module_sca_manifest_org, module_location, module_activation_key.name, module_target_sat
+    )
+    assert result.status == 0, f'Failed to register host: {result.stderr}'
+    host_info = module_target_sat.cli.Host.info(
+        {'name': rhel_contenthost.hostname}, output_format='json'
+    )
+    assert len(host_info['network-interfaces']) == len(interfaces) + 1  # facts + default interface
+    for interface in interfaces:
+        for interface_name in interface.values():
+            assert interface_name in str(host_info['network-interfaces'])
+
+
+@pytest.mark.upgrade
+@pytest.mark.no_containers
+@pytest.mark.rhel_ver_list([settings.content_host.default_rhel_version])
+def test_positive_global_registration_with_gpg_repo(
+    module_sca_manifest_org,
+    module_location,
+    module_activation_key,
+    module_target_sat,
+    rhel_contenthost,
+):
+    """Verify host registration command gets generated and host is registered successfully with gpg repo enabled.
+
+    :id: 8f01d904-dd52-47eb-b909-975574a7c7c7
+
+    :steps:
+        1. Register host with global registration template with gpg repo and key to Satellite.
+
+    :expectedresults: Host is successfully registered, gpg repo is enabled.
+    """
+    org = module_sca_manifest_org
+    repo_url = settings.repos.gr_yum_repo.url
+    repo_gpg_url = settings.repos.gr_yum_repo.gpg_url
+    result = rhel_contenthost.register(
+        org,
+        module_location,
+        module_activation_key.name,
+        module_target_sat,
+        repo_data=f'repo={repo_url},repo_gpg_key_url={repo_gpg_url}',
+    )
+    assert result.status == 0
+    assert rhel_contenthost.subscribed
+    result = rhel_contenthost.execute('yum -v repolist')
+    assert repo_url in result.stdout
+    assert result.status == 0
+    if not is_open('SAT-27653'):
+        assert rhel_contenthost.execute('dnf install -y bear').status == 0

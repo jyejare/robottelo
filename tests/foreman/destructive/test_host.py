@@ -11,6 +11,7 @@
 :CaseImportance: High
 
 """
+
 from airgun.exceptions import NoSuchElementException
 import pytest
 
@@ -43,9 +44,11 @@ class TestHostCockpit:
             4. restart the satellite services.
             5. check cockpit page is loaded and displays sat host info.
 
-        expectedresults:
+        :expectedresults:
             1. cockpit service is restarted after the services restart.
             2. cockpit page is loaded and displays sat host info
+
+        :Verifies: SAT-27411
 
         :parametrized: yes
         """

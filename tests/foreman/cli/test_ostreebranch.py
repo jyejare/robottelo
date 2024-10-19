@@ -11,9 +11,9 @@
 :CaseImportance: High
 
 """
+
 import random
 
-from nailgun import entities
 import pytest
 
 from robottelo.config import settings
@@ -28,9 +28,9 @@ pytestmark = [
 
 
 @pytest.fixture(scope='module')
-def ostree_user_credentials():
+def ostree_user_credentials(module_target_sat):
     password = 'password'
-    user = entities.User(admin=True, password=password).create()
+    user = module_target_sat.api.User(admin=True, password=password).create()
     return user.login, password
 
 
@@ -68,7 +68,6 @@ def ostree_repo_with_user(ostree_user_credentials, module_target_sat):
     return {'cv': cv, 'org': org, 'ostree_repo': ostree_repo, 'product': product}
 
 
-@pytest.mark.skip_if_open("BZ:1625783")
 def test_positive_list(ostree_user_credentials, ostree_repo_with_user, module_target_sat):
     """List Ostree Branches
 
@@ -96,7 +95,6 @@ def test_positive_list_by_repo_id(
     assert len(result) > 0
 
 
-@pytest.mark.skip_if_open("BZ:1625783")
 def test_positive_list_by_product_id(
     ostree_repo_with_user, ostree_user_credentials, module_target_sat
 ):
@@ -112,7 +110,6 @@ def test_positive_list_by_product_id(
     assert len(result) > 0
 
 
-@pytest.mark.skip_if_open("BZ:1625783")
 def test_positive_list_by_org_id(ostree_repo_with_user, ostree_user_credentials, module_target_sat):
     """List Ostree branches by org id
 
@@ -126,7 +123,6 @@ def test_positive_list_by_org_id(ostree_repo_with_user, ostree_user_credentials,
     assert len(result) > 0
 
 
-@pytest.mark.skip_if_open("BZ:1625783")
 def test_positive_list_by_cv_id(ostree_repo_with_user, ostree_user_credentials, module_target_sat):
     """List Ostree branches by cv id
 
@@ -140,7 +136,6 @@ def test_positive_list_by_cv_id(ostree_repo_with_user, ostree_user_credentials, 
     assert len(result) > 0
 
 
-@pytest.mark.skip_if_open("BZ:1625783")
 def test_positive_info_by_id(ostree_user_credentials, ostree_repo_with_user, module_target_sat):
     """Get info for Ostree branch by id
 

@@ -11,6 +11,8 @@
 :CaseImportance: High
 
 """
+
+from datetime import datetime, timedelta
 from tempfile import mkstemp
 import time
 
@@ -20,20 +22,24 @@ import pytest
 from robottelo.config import settings
 from robottelo.constants import (
     DEFAULT_SUBSCRIPTION_NAME,
+    EXPIRED_MANIFEST,
+    EXPIRED_MANIFEST_DATE,
     PRDS,
     REPOS,
     REPOSET,
     VDC_SUBSCRIPTION_NAME,
     VIRT_WHO_HYPERVISOR_TYPES,
+    DataFile,
 )
+from robottelo.utils.issue_handlers import is_open
 from robottelo.utils.manifest import clone
 
 pytestmark = [pytest.mark.run_in_one_thread, pytest.mark.skip_if_not_set('fake_manifest')]
 
 
 @pytest.fixture(scope='module')
-def golden_ticket_host_setup(function_entitlement_manifest_org, module_target_sat):
-    org = function_entitlement_manifest_org
+def golden_ticket_host_setup(function_sca_manifest_org, module_target_sat):
+    org = function_sca_manifest_org
     rh_repo_id = module_target_sat.api_factory.enable_rhrepo_and_fetchid(
         basearch='x86_64',
         org_id=org.id,
@@ -173,7 +179,7 @@ def test_positive_access_with_non_admin_user_without_manifest(test_name, target_
 @pytest.mark.tier2
 @pytest.mark.upgrade
 def test_positive_access_with_non_admin_user_with_manifest(
-    test_name, function_entitlement_manifest_org, target_sat
+    test_name, function_sca_manifest_org, target_sat
 ):
     """Access subscription page with user that has only view_subscriptions and view organizations
     permission and organization that has a manifest uploaded.
@@ -189,7 +195,7 @@ def test_positive_access_with_non_admin_user_with_manifest(
 
     :CaseImportance: Critical
     """
-    org = function_entitlement_manifest_org
+    org = function_sca_manifest_org
     role = target_sat.api.Role(organization=[org]).create()
     target_sat.api_factory.create_role_permissions(
         role,
@@ -212,7 +218,7 @@ def test_positive_access_with_non_admin_user_with_manifest(
 
 @pytest.mark.tier2
 def test_positive_access_manifest_as_another_admin_user(
-    test_name, target_sat, function_entitlement_manifest
+    test_name, target_sat, function_sca_manifest
 ):
     """Other admin users should be able to access and manage a manifest
     uploaded by a different admin.
@@ -238,7 +244,7 @@ def test_positive_access_manifest_as_another_admin_user(
     ).create()
     # use the first admin to upload a manifest
     with target_sat.ui_session(test_name, user=user1.login, password=user1_password) as session:
-        target_sat.upload_manifest(org.id, function_entitlement_manifest.content)
+        target_sat.upload_manifest(org.id, function_sca_manifest.content)
         assert session.subscription.has_manifest
         # store subscriptions that have "Red Hat" in the name for later
         rh_subs = session.subscription.search("Red Hat")
@@ -254,7 +260,7 @@ def test_positive_access_manifest_as_another_admin_user(
 
 @pytest.mark.tier3
 def test_positive_view_vdc_subscription_products(
-    session, rhel7_contenthost, target_sat, function_entitlement_manifest_org
+    session, rhel7_contenthost, target_sat, function_sca_manifest_org
 ):
     """Ensure that Virtual Datacenters subscription provided products is
     not empty and that a consumed product exist in content products.
@@ -286,7 +292,7 @@ def test_positive_view_vdc_subscription_products(
 
     :parametrized: yes
     """
-    org = function_entitlement_manifest_org
+    org = function_sca_manifest_org
     lce = target_sat.api.LifecycleEnvironment(organization=org).create()
     repos_collection = target_sat.cli_factory.RepositoryCollection(
         distro='rhel7',
@@ -301,7 +307,6 @@ def test_positive_view_vdc_subscription_products(
     )
     with session:
         session.organization.select(org.name)
-        session.contenthost.add_subscription(rhel7_contenthost.hostname, VDC_SUBSCRIPTION_NAME)
         provided_products = session.subscription.provided_products(VDC_SUBSCRIPTION_NAME)
         # ensure that subscription provided products list is not empty and that the product is
         # in the provided products.
@@ -315,7 +320,7 @@ def test_positive_view_vdc_subscription_products(
 @pytest.mark.skip_if_not_set('libvirt')
 @pytest.mark.tier3
 def test_positive_view_vdc_guest_subscription_products(
-    session, rhel7_contenthost, target_sat, function_entitlement_manifest_org
+    session, rhel7_contenthost, target_sat, function_sca_manifest_org
 ):
     """Ensure that Virtual Data Centers guest subscription Provided
     Products and Content Products are not empty.
@@ -344,7 +349,7 @@ def test_positive_view_vdc_guest_subscription_products(
 
     :parametrized: yes
     """
-    org = function_entitlement_manifest_org
+    org = function_sca_manifest_org
     lce = target_sat.api.LifecycleEnvironment(organization=org).create()
     provisioning_server = settings.libvirt.libvirt_hostname
     rh_product_repository = target_sat.cli_factory.RHELAnsibleEngineRepository(cdn=True)
@@ -396,7 +401,7 @@ def test_positive_view_vdc_guest_subscription_products(
 
 @pytest.mark.tier3
 def test_select_customizable_columns_uncheck_and_checks_all_checkboxes(
-    session, function_org, function_entitlement_manifest
+    session, function_org, function_sca_manifest
 ):
     """Ensures that no column headers from checkboxes show up in the table after
     unticking everything from selectable customizable column
@@ -435,7 +440,7 @@ def test_select_customizable_columns_uncheck_and_checks_all_checkboxes(
     with session:
         session.organization.select(org.name)
         session.subscription.add_manifest(
-            function_entitlement_manifest.path,
+            function_sca_manifest.path,
             ignore_error_messages=['Danger alert: Katello::Errors::UpstreamConsumerNotFound'],
         )
         headers = session.subscription.filter_columns(checkbox_dict)
@@ -448,108 +453,79 @@ def test_select_customizable_columns_uncheck_and_checks_all_checkboxes(
         assert set(col) == set(checkbox_dict)
 
 
-@pytest.mark.tier3
-def test_positive_subscription_status_disabled_golden_ticket(
-    session, golden_ticket_host_setup, rhel7_contenthost, target_sat
+@pytest.mark.parametrize('setting_update', ['expire_soon_days'], indirect=True)
+def test_positive_check_manifest_validity_notification(
+    target_sat, setting_update, function_org, function_sca_manifest
 ):
-    """Verify that Content host Subscription status is set to 'Disabled'
-     for a golden ticket manifest
+    """Check notification when manifest is going to expire.
 
-    :id: 115595ef-929d-4c42-bf34-aadd1bd36a5f
+    :id: 29ab0e80-25eb-44f0-9294-3a26922c33c5
 
-    :expectedresults: subscription status is 'Disabled'
-
-    :customerscenario: true
-
-    :BZ: 1789924
-
-    :parametrized: yes
-
-    :CaseImportance: Medium
-    """
-    rhel7_contenthost.install_katello_ca(target_sat)
-    org, ak = golden_ticket_host_setup
-    rhel7_contenthost.register_contenthost(org.label, ak.name)
-    assert rhel7_contenthost.subscribed
-    with session:
-        session.organization.select(org_name=org.name)
-        host = session.contenthost.read(rhel7_contenthost.hostname, widget_names='details')[
-            'details'
-        ]['subscription_status']
-        assert 'Simple Content Access' in host
-
-
-@pytest.mark.tier2
-def test_positive_candlepin_events_processed_by_STOMP(
-    session, rhel7_contenthost, target_sat, function_entitlement_manifest_org
-):
-    """Verify that Candlepin events are being read and processed by
-       attaching subscriptions, validating host subscriptions status,
-       and viewing processed and failed Candlepin events
-
-    :id: 9510fd1c-2efb-4132-8665-9a72273cd1af
+    :setup:
+        1. create new organization
 
     :steps:
+        1. Upload expired manifest in newly created org
+        2. Go to Content > Subscriptions page, click on 'Manage Manifest' button.
+        3. Search for message string 'Manifest expired', or 'Your manifest expired'
+        4. Delete expired manifest from this org (cleanup part)
+        5. Upload non-expired manifest
+        6. Go to Content > Subscription page, click on 'Manage Manifest' button.
+        7. Search for message string 'Manifest expiring soon', or 'Your manifest will expire'
+        8. Delete non-expired manifest from this org (cleanup part)
 
-        1. Register Content Host without subscriptions attached
-        2. Verify subscriptions status is red "invalid"
-        3. Import a Manifest
-        4. Attach subs to content host
-        5. Verify subscription status is green "valid"
-        6. Check for processed and failed Candlepin events
+    :expectedresults:
+        1. 'Manifest expired', 'Manifest expiring soon' messages appear on Manage Manifest modal box
 
-    :expectedresults: Candlepin events are being read and processed
-                      correctly without any failures
+    :Verifies: SAT-11630
 
-    :BZ: 1826515
-
-    :parametrized: yes
-
-    :CaseImportance: High
+    :customerscenario: true
     """
-    org = function_entitlement_manifest_org
-    repo = target_sat.api.Repository(
-        product=target_sat.api.Product(organization=org).create()
-    ).create()
-    repo.sync()
-    ak = target_sat.api.ActivationKey(
-        content_view=org.default_content_view,
-        max_hosts=100,
-        organization=org,
-        environment=target_sat.api.LifecycleEnvironment(id=org.library.id),
-    ).create()
-    rhel7_contenthost.install_katello_ca(target_sat)
-    rhel7_contenthost.register_contenthost(org.name, ak.name)
-    with session:
-        session.organization.select(org_name=org.name)
-        host = session.contenthost.read(rhel7_contenthost.hostname, widget_names='details')[
-            'details'
-        ]
-        assert 'Unentitled' in host['subscription_status']
-        session.contenthost.add_subscription(rhel7_contenthost.hostname, DEFAULT_SUBSCRIPTION_NAME)
-        session.browser.refresh()
-        updated_sub_status = session.contenthost.read(
-            rhel7_contenthost.hostname, widget_names='details'
-        )['details']['subscription_status']
-        assert 'Fully entitled' in updated_sub_status
-        response = target_sat.api.Ping().search_json()['services']['candlepin_events']
-        assert response['status'] == 'ok'
-        assert '0 Failed' in response['message']
+    remote_path = f'/tmp/{EXPIRED_MANIFEST}'
+    target_sat.put(DataFile.EXPIRED_MANIFEST_FILE, remote_path)
+    # upload expired manifest
+    target_sat.cli.Subscription.upload({'organization-id': function_org.id, 'file': remote_path})
 
-
-def test_positive_prepare_for_sca_only_subscription(target_sat, function_entitlement_manifest_org):
-    """Verify that the Subcsription page notifies users that Simple Content Access
-        will be required for all organizations in Satellite 6.16
-
-    :id: cb6fdfdd-04ee-4acb-9460-c78556cef11e
-
-    :expectedresults: The Subscription page notifies users that Simple Content Access will
-        be required for all organizations in Satellite 6.16
-    """
     with target_sat.ui_session() as session:
-        session.organization.select(function_entitlement_manifest_org.name)
-        sca_alert = session.subscription.sca_alert()
+        # Message - Manifest expired
+        session.organization.select(function_org.name)
+        # read expire manifest message
+        expired_manifest = session.subscription.read_subscription_manifest_header_message_and_date()
+        assert 'Manifest expired' in expired_manifest['header'], 'Manifest expire alert not found'
+        if not is_open('SAT-25052'):
+            assert (
+                f'Your manifest expired on {EXPIRED_MANIFEST_DATE}. To continue using '
+                f'Red Hat content, import a new manifest.' in expired_manifest['message']
+            )
+        # Cleanup - delete expired manifest
+        session.subscription.delete_manifest(
+            ignore_error_messages=['Danger alert: Katello::Errors::UpstreamConsumerNotFound']
+        )
+
+        # Message - Manifest expiring soon
+        # Upload non-expire manifest
+        target_sat.upload_manifest(function_org.id, function_sca_manifest.content)
+
+        # Initially 'Manifest expiring soon' message not found
+        assert not session.subscription.is_subscription_manifest_header_message_display()
+        # then update the 'Expire soon days' value from settings > Content
+        # value should be greater than 365 to get expected output message
+        setting_update.value = 366
+        setting_update = setting_update.update({'value'})
+        session.browser.refresh()
+        # Predict expire date using below formula
+        date = datetime.now() + timedelta(days=365)
+        formatted_date = date.strftime('%a %b %d %Y')
+        # read expire manifest message
+        expiring_soon = session.subscription.read_subscription_manifest_header_message_and_date()
         assert (
-            'This organization is not using Simple Content Access. Entitlement-based subscription '
-            'management is deprecated and will be removed in Satellite 6.16.' in sca_alert
+            'Manifest expiring soon' in expiring_soon['header']
+        ), 'Manifest expire alert not found'
+        assert formatted_date in expiring_soon['date']
+        session.subscription.refresh_manifest()
+        expires_date = session.subscription.read_subscription_manifest_expiration_date_only()
+        assert formatted_date in expires_date
+        # Cleanup - delete non-expired manifest
+        session.subscription.delete_manifest(
+            ignore_error_messages=['Danger alert: Katello::Errors::UpstreamConsumerNotFound']
         )

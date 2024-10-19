@@ -11,6 +11,7 @@
 :CaseImportance: High
 
 """
+
 from calendar import monthrange
 from datetime import datetime, timedelta
 import random
@@ -24,6 +25,7 @@ from wait_for import wait_for
 from robottelo import constants
 from robottelo.config import settings
 from robottelo.constants import FAKE_4_CUSTOM_PACKAGE
+from robottelo.exceptions import CLIFactoryError
 from robottelo.utils import ohsnap
 from robottelo.utils.datafactory import filtered_datapoint, parametrized
 
@@ -133,32 +135,143 @@ class TestRemoteExecution:
         assert 'Internal Server Error' not in out
 
     @pytest.mark.tier3
+    @pytest.mark.rhel_ver_list([8])
+    def test_negative_run_default_job_template(
+        self, module_org, rex_contenthost, module_target_sat
+    ):
+        """Confirm that job status is correct if remote action fails
+
+        :id: b6229222-26cf-46bd-bbf6-46814cafd085
+
+        :expectedresults: Verify the job exits as expected
+
+        :verifies: SAT-28435
+
+        :parametrized: yes
+        """
+        client = rex_contenthost
+        command = 'exit 23'
+        with pytest.raises(CLIFactoryError) as error:
+            module_target_sat.cli_factory.job_invocation(
+                {
+                    'job-template': 'Run Command - Script Default',
+                    'inputs': f'command={command}',
+                    'search-query': f"name ~ {client.hostname}",
+                }
+            )
+        assert 'A sub task failed' in error.value.args[0]
+        task = module_target_sat.cli.Task.list_tasks({'search': command})[0]
+        search = module_target_sat.cli.Task.list_tasks({'search': f'id={task["id"]}'})
+        assert search[0]['action'] == task['action']
+        job_id = [
+            job['id']
+            for job in module_target_sat.cli.JobInvocation.list()
+            if job['description'] == f'Run {command}'
+        ][0]
+        out = module_target_sat.cli.JobInvocation.get_output(
+            {
+                'id': job_id,
+                'host': client.hostname,
+                'organization-id': module_org.id,
+            }
+        )
+        assert 'Exit status: 23' in out
+
+    @pytest.mark.tier3
+    @pytest.mark.rhel_ver_list([8])
+    def test_positive_timeout_to_kill(self, module_org, rex_contenthost, module_target_sat):
+        """Use timeout to kill setting to cancel the job
+
+        :id: 580f886b-ac24-4afa-9aca-e9afc5cfdc9c
+
+        :expectedresults: Verify the job was killed after specified times
+
+        :parametrized: yes
+
+        :Verifies: SAT-25243
+
+        :customerscenario: true
+        """
+        client = rex_contenthost
+        command = r'for run in {1..160}; do sleep 1; done'
+        template_id = (
+            module_target_sat.api.JobTemplate()
+            .search(query={'search': 'name="Run Command - Script Default"'})[0]
+            .id
+        )
+        invocation_command = module_target_sat.api.JobInvocation().run(
+            synchronous=False,
+            data={
+                'job_template_id': template_id,
+                'organization': module_org.name,
+                'inputs': {
+                    'command': command,
+                },
+                'search_query': f'name = {client.hostname}',
+                'targeting_type': 'static_query',
+                'execution_timeout_interval': '5',
+            },
+        )
+        sleep(10)
+        result = module_target_sat.api.JobInvocation(id=invocation_command['id']).read()
+        assert result.failed == 1
+        out = module_target_sat.cli.JobInvocation.get_output(
+            {
+                'id': invocation_command['id'],
+                'host': client.hostname,
+                'organization-id': module_org.id,
+            }
+        )
+        assert 'Timeout for execution passed, trying to stop the job' in out
+
+    @pytest.mark.tier3
     @pytest.mark.pit_client
     @pytest.mark.pit_server
+    @pytest.mark.parametrize(
+        'setting_update',
+        [
+            'remote_execution_effective_user_method=sudo',
+            'remote_execution_effective_user_method=su',
+        ],
+        ids=["sudo", "su"],
+        indirect=True,
+    )
     @pytest.mark.rhel_ver_list([7, 8, 9])
-    def test_positive_run_job_effective_user(self, rex_contenthost, module_target_sat):
-        """Run default job template as effective user on a host
+    def test_positive_run_job_effective_user(
+        self, rex_contenthost, module_target_sat, setting_update
+    ):
+        """Run default job template as effective user on a host, test ssh user as well
 
         :id: 0cd75cab-f699-47e6-94d3-4477d2a94bb7
 
         :BZ: 1451675, 1804685
 
+        :verifies: SAT-22554, SAT-23229
+
         :expectedresults: Verify the job was successfully run under the
-            effective user identity on host
+            effective user identity on host, make sure the password is
+            used
 
         :parametrized: yes
+
+        :customerscenario: true
         """
         client = rex_contenthost
         # create a user on client via remote job
+        ssh_username = gen_string('alpha')
+        ssh_password = gen_string('alpha')
         username = gen_string('alpha')
+        password = gen_string('cjk')
         filename = gen_string('alpha')
         make_user_job = module_target_sat.cli_factory.job_invocation(
             {
                 'job-template': 'Run Command - Script Default',
-                'inputs': f"command=useradd -m {username}",
+                'inputs': f"command=useradd {ssh_username} -G wheel; echo {ssh_username}:{ssh_password} | chpasswd; useradd {username} -G wheel; echo {username}:{password} | chpasswd",
                 'search-query': f"name ~ {client.hostname}",
+                'description-format': 'adding users',
             }
         )
+        client.execute('echo "Defaults targetpw" >> /etc/sudoers')
         assert_job_invocation_result(module_target_sat, make_user_job['id'], client.hostname)
         # create a file as new user
         invocation_command = module_target_sat.cli_factory.job_invocation(
@@ -166,7 +279,10 @@ class TestRemoteExecution:
                 'job-template': 'Run Command - Script Default',
                 'inputs': f"command=touch /home/{username}/{filename}",
                 'search-query': f"name ~ {client.hostname}",
+                'ssh-user': f'{ssh_username}',
+                'password': f'{ssh_password}',
                 'effective-user': f'{username}',
+                'effective-user-password': f'{password}',
             }
         )
         assert_job_invocation_result(module_target_sat, invocation_command['id'], client.hostname)
@@ -176,6 +292,24 @@ class TestRemoteExecution:
         )
         # assert the file is owned by the effective user
         assert username == result.stdout.strip('\n')
+        result = client.execute(
+            f'''stat -c '%G' /home/{username}/{filename}''',
+        )
+        # assert the file is in the effective user's group
+        assert username == result.stdout.strip('\n')
+        # negative check for unspecified password
+        filename = gen_string('alpha')
+        with pytest.raises(CLIFactoryError):
+            invocation_command = module_target_sat.cli_factory.job_invocation(
+                {
+                    'job-template': 'Run Command - Script Default',
+                    'inputs': f"command=touch /home/{username}/{filename}",
+                    'search-query': f"name ~ {client.hostname}",
+                    'ssh-user': f'{ssh_username}',
+                    'password': f'{ssh_password}',
+                    'effective-user': f'{username}',
+                }
+            )
 
     @pytest.mark.tier3
     @pytest.mark.e2e
@@ -271,7 +405,7 @@ class TestRemoteExecution:
             None,
             module_ak_with_cv.name,
             target_sat,
-            repo=settings.repos.yum_3.url,
+            repo_data=f'repo={settings.repos.yum_3.url}',
         )
         # Install packages
         invocation_command = target_sat.cli_factory.job_invocation(
@@ -335,7 +469,7 @@ class TestRemoteExecution:
             None,
             module_ak_with_cv.name,
             target_sat,
-            repo=settings.repos.yum_1.url,
+            repo_data=f'repo={settings.repos.yum_1.url}',
         )
         # Install the package groups
         invocation_command = target_sat.cli_factory.job_invocation(
@@ -384,7 +518,7 @@ class TestRemoteExecution:
             None,
             module_ak_with_cv.name,
             target_sat,
-            repo=settings.repos.yum_1.url,
+            repo_data=f'repo={settings.repos.yum_1.url}',
         )
         client.run(f'dnf install -y {constants.FAKE_1_CUSTOM_PACKAGE}')
         # Install errata
@@ -605,12 +739,17 @@ class TestRexUsers:
     """Tests related to remote execution users"""
 
     @pytest.fixture(scope='class')
-    def class_rexmanager_user(self, module_org, class_target_sat):
+    def class_rexmanager_user(self, module_org, default_location, class_target_sat):
         """Creates a user with Remote Execution Manager role"""
         password = gen_string('alpha')
         rexmanager = gen_string('alpha')
         class_target_sat.cli_factory.user(
-            {'login': rexmanager, 'password': password, 'organization-ids': module_org.id}
+            {
+                'login': rexmanager,
+                'password': password,
+                'organization-ids': module_org.id,
+                'location-ids': default_location.id,
+            }
         )
         class_target_sat.cli.User.add_role(
             {'login': rexmanager, 'role': 'Remote Execution Manager'}
@@ -618,12 +757,17 @@ class TestRexUsers:
         return (rexmanager, password)
 
     @pytest.fixture(scope='class')
-    def class_rexinfra_user(self, module_org, class_target_sat):
+    def class_rexinfra_user(self, module_org, default_location, class_target_sat):
         """Creates a user with all Remote Execution related permissions"""
         password = gen_string('alpha')
         rexinfra = gen_string('alpha')
         class_target_sat.cli_factory.user(
-            {'login': rexinfra, 'password': password, 'organization-ids': module_org.id}
+            {
+                'login': rexinfra,
+                'password': password,
+                'organization-ids': module_org.id,
+                'location-ids': default_location.id,
+            }
         )
         role = class_target_sat.cli_factory.make_role({'organization-ids': module_org.id})
         invocation_permissions = [
@@ -870,7 +1014,7 @@ class TestPullProviderRex:
             module_ak_with_cv.name,
             module_capsule_configured_mqtt,
             packages=['katello-agent'],
-            repo=client_repo.baseurl,
+            repo_data=f'repo={client_repo.baseurl}',
             ignore_subman_errors=True,
             force=True,
         )
@@ -925,8 +1069,113 @@ class TestPullProviderRex:
         result = module_target_sat.cli.JobInvocation.info({'id': invocation_command['id']})
 
     @pytest.mark.tier3
+    @pytest.mark.no_containers
+    @pytest.mark.rhel_ver_match('[^6].*')
+    @pytest.mark.parametrize(
+        'setting_update',
+        ['remote_execution_global_proxy=False'],
+        ids=["no_global_proxy"],
+        indirect=True,
+    )
+    def test_positive_run_job_in_chosen_directory(
+        self,
+        module_org,
+        module_target_sat,
+        smart_proxy_location,
+        module_ak_with_cv,
+        module_capsule_configured_mqtt,
+        rhel_contenthost,
+        setting_update,
+    ):
+        """Run job on host registered to mqtt, check it honors run directory
+
+        :id: d4ae37db-d3b6-41b3-bd98-48c29389e4c5
+
+        :expectedresults: Verify the job was successfully ran against the host registered to mqtt, in the correct directory
+
+        :BZ: 2217079
+
+        :parametrized: yes
+        """
+        client_repo = ohsnap.dogfood_repository(
+            settings.ohsnap,
+            product='client',
+            repo='client',
+            release='client',
+            os_release=rhel_contenthost.os_version.major,
+        )
+        # Update module_capsule_configured_mqtt to include module_org/smart_proxy_location
+        module_target_sat.cli.Capsule.update(
+            {
+                'name': module_capsule_configured_mqtt.hostname,
+                'organization-ids': module_org.id,
+                'location-ids': smart_proxy_location.id,
+            }
+        )
+        # register host with pull provider rex
+        result = rhel_contenthost.register(
+            module_org,
+            smart_proxy_location,
+            module_ak_with_cv.name,
+            module_capsule_configured_mqtt,
+            setup_remote_execution_pull=True,
+            repo_data=f'repo={client_repo.baseurl}',
+            ignore_subman_errors=True,
+            force=True,
+        )
+
+        assert result.status == 0, f'Failed to register host: {result.stderr}'
+        # check mqtt client is running
+        result = rhel_contenthost.execute('systemctl status yggdrasild')
+        assert result.status == 0, f'Failed to start yggdrasil on client: {result.stderr}'
+
+        # create a new directory and set in in yggdrasil
+        path = f'/{gen_string("alpha")}'
+        config_path_dir = '/etc/systemd/system/yggdrasild.service.d/'
+        config_path = f'{config_path_dir}/override.conf'
+        assert (
+            rhel_contenthost.execute(
+                f'mkdir {path} && mount -t tmpfs tmpfs {path} && mkdir {config_path_dir} && echo -e "[Service]\nEnvironment=FOREMAN_YGG_WORKER_WORKDIR={path}" > {config_path} && systemctl daemon-reload && systemctl restart yggdrasild'
+            ).status
+            == 0
+        )
+
+        # run rex command in the created directory
+        invocation_command = module_target_sat.cli_factory.job_invocation(
+            {
+                'job-template': 'Run Command - Script Default',
+                'inputs': 'command=printenv',
+                'search-query': f"name ~ {rhel_contenthost.hostname}",
+            }
+        )
+        assert_job_invocation_result(
+            module_target_sat, invocation_command['id'], rhel_contenthost.hostname
+        )
+        assert (
+            f'FOREMAN_YGG_WORKER_WORKDIR={path}'
+            in module_target_sat.cli.JobInvocation.get_output(
+                {'id': invocation_command['id'], 'host': rhel_contenthost.hostname}
+            )
+        )
+
+        # remount the directory as noexec
+        rhel_contenthost.execute(f'mount -o remount,noexec {path}')
+
+        # run rex command in the created directory again;
+        # it should fail; if it does not, it is probably not being run in that directory
+        with pytest.raises(CLIFactoryError):
+            invocation_command = module_target_sat.cli_factory.job_invocation(
+                {
+                    'job-template': 'Run Command - Script Default',
+                    'inputs': 'command=printenv',
+                    'search-query': f"name ~ {rhel_contenthost.hostname}",
+                }
+            )
+
+    @pytest.mark.tier3
     @pytest.mark.upgrade
     @pytest.mark.e2e
+    @pytest.mark.pit_client
     @pytest.mark.no_containers
     @pytest.mark.rhel_ver_match('[^6].*')
     @pytest.mark.parametrize(
@@ -978,7 +1227,7 @@ class TestPullProviderRex:
             module_ak_with_cv.name,
             module_capsule_configured_mqtt,
             setup_remote_execution_pull=True,
-            repo=client_repo.baseurl,
+            repo_data=f'repo={client_repo.baseurl}',
             ignore_subman_errors=True,
             force=True,
         )
@@ -1074,7 +1323,7 @@ class TestPullProviderRex:
             module_ak_with_cv.name,
             module_capsule_configured_mqtt,
             setup_remote_execution_pull=True,
-            repo=client_repo.baseurl,
+            repo_data=f'repo={client_repo.baseurl}',
             ignore_subman_errors=True,
             force=True,
         )
@@ -1164,7 +1413,7 @@ class TestPullProviderRex:
             module_ak_with_cv.name,
             module_capsule_configured_mqtt,
             setup_remote_execution_pull=True,
-            repo=client_repo.baseurl,
+            repo_data=f'repo={client_repo.baseurl}',
             ignore_subman_errors=True,
             force=True,
         )

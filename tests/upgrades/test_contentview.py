@@ -11,6 +11,7 @@
 :CaseImportance: High
 
 """
+
 from fauxfactory import gen_alpha
 import pytest
 
@@ -36,6 +37,8 @@ class TestContentView:
           4. Publish the content-view.
 
         :expectedresults: Content-view created with various repositories.
+
+        :BlockedBy: SAT-28048
         """
         test_name = request.node.name + gen_alpha()
         org = target_sat.api.Organization(name=f'{test_name}_org').create()
@@ -73,6 +76,7 @@ class TestContentView:
           2. Content view created before upgrade should be intact.
           3. The new repository should be added/updated to the CV.
 
+        :BlockedBy: SAT-28048
         """
         pre_test_name = pre_upgrade_data.get('test_name')
         cv_name = pre_upgrade_data.get('cv_name')
@@ -87,7 +91,6 @@ class TestContentView:
         cv = target_sat.api.ContentView(organization=org.id).search(
             query={'search': f'name="{cv_name}"'}
         )[0]
-        request.addfinalizer(cv.delete)
         yum_repo = target_sat.api.Repository(organization=org.id).search(
             query={'search': f'name="{pre_test_name}_yum_repo"'}
         )[0]
@@ -96,6 +99,7 @@ class TestContentView:
             query={'search': f'name="{pre_test_name}_file_repo"'}
         )[0]
         request.addfinalizer(file_repo.delete)
+        request.addfinalizer(cv.delete)  # the order matters - addfinalizer works like a stack/LIFO
         cv.repository = []
         cv.update(['repository'])
         assert len(cv.read_json()['repositories']) == 0

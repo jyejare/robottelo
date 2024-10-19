@@ -11,6 +11,7 @@
 :CaseImportance: High
 
 """
+
 from fauxfactory import gen_string
 import pytest
 
@@ -22,7 +23,7 @@ CUSTOM_REPO_ERRATA_ID = settings.repos.yum_0.errata[0]
 
 
 @pytest.fixture(scope='module')
-def module_repos_col(request, module_entitlement_manifest_org, module_lce, module_target_sat):
+def module_repos_col(request, module_sca_manifest_org, module_lce, module_target_sat):
     repos_collection = module_target_sat.cli_factory.RepositoryCollection(
         repositories=[
             # As Satellite Tools may be added as custom repo and to have a "Fully entitled" host,
@@ -30,15 +31,15 @@ def module_repos_col(request, module_entitlement_manifest_org, module_lce, modul
             module_target_sat.cli_factory.YumRepository(url=settings.repos.yum_0.url),
         ],
     )
-    repos_collection.setup_content(module_entitlement_manifest_org.id, module_lce.id)
+    repos_collection.setup_content(module_sca_manifest_org.id, module_lce.id)
     yield repos_collection
 
     @request.addfinalizer
     def _cleanup():
         try:
             module_target_sat.api.Subscription(
-                organization=module_entitlement_manifest_org
-            ).delete_manifest(data={'organization_id': module_entitlement_manifest_org.id})
+                organization=module_sca_manifest_org
+            ).delete_manifest(data={'organization_id': module_sca_manifest_org.id})
         except Exception:
             logger.exception('Exception cleaning manifest:')
 
@@ -52,6 +53,8 @@ def test_positive_end_to_end(session, module_target_sat):
     :id: abe878a9-a6bc-41e5-a39a-0fed9012b80f
 
     :expectedresults: All expected CRUD actions finished successfully
+
+    :BlockedBy: SAT-27703
 
     :CaseImportance: Critical
     """
@@ -172,6 +175,10 @@ def test_positive_search_scoped(session):
 
     :BZ: 1259374
 
+    :BlockedBy: SAT-27703
+
+    :Verifies: SAT-27703
+
     :CaseImportance: Medium
     """
     org_name = gen_string('alpha')
@@ -186,7 +193,6 @@ def test_positive_search_scoped(session):
             assert session.organization.search(query)[0]['Name'] == org_name
 
 
-@pytest.mark.skip_if_open("BZ:1321543")
 @pytest.mark.tier2
 def test_positive_create_with_all_users(session, module_target_sat):
     """Create organization and new user. Check 'all users' setting for
@@ -199,7 +205,9 @@ def test_positive_create_with_all_users(session, module_target_sat):
 
     :expectedresults: Organization and user entities assigned to each other
 
-    :BZ: 1321543
+    :verifies: SAT-25386
+
+    :BlockedBy: SAT-25386
     """
     user = module_target_sat.api.User().create()
     org = module_target_sat.api.Organization().create()
@@ -245,7 +253,7 @@ def test_positive_update_compresource(session, module_target_sat):
 @pytest.mark.skip_if_not_set('fake_manifest')
 @pytest.mark.tier2
 @pytest.mark.upgrade
-def test_positive_delete_with_manifest_lces(session, target_sat, function_entitlement_manifest_org):
+def test_positive_delete_with_manifest_lces(session, target_sat, function_sca_manifest_org):
     """Create Organization with valid values and upload manifest.
     Then try to delete that organization.
 
@@ -255,7 +263,7 @@ def test_positive_delete_with_manifest_lces(session, target_sat, function_entitl
 
     :CaseImportance: Critical
     """
-    org = function_entitlement_manifest_org
+    org = function_sca_manifest_org
     with session:
         session.organization.select(org.name)
         session.lifecycleenvironment.create({'name': 'DEV'})
@@ -269,9 +277,7 @@ def test_positive_delete_with_manifest_lces(session, target_sat, function_entitl
 
 @pytest.mark.tier2
 @pytest.mark.upgrade
-def test_positive_download_debug_cert_after_refresh(
-    session, target_sat, function_entitlement_manifest_org
-):
+def test_positive_download_debug_cert_after_refresh(session, target_sat, function_sca_manifest_org):
     """Create organization with valid manifest. Download debug
     certificate for that organization and refresh added manifest for few
     times in a row
@@ -282,7 +288,7 @@ def test_positive_download_debug_cert_after_refresh(
 
     :CaseImportance: High
     """
-    org = function_entitlement_manifest_org
+    org = function_sca_manifest_org
     try:
         with session:
             session.organization.select(org.name)
@@ -344,23 +350,3 @@ def test_positive_product_view_organization_switch(session, module_org, module_p
         assert session.product.search(module_product.name)
         session.organization.select(org_name="Default Organization")
         assert session.product.search(module_product.name) != module_product.name
-
-
-def test_positive_prepare_for_sca_only_organization(target_sat, function_entitlement_manifest_org):
-    """Verify that the organization details page notifies users that Simple Content Access
-        will be required for all organizations in Satellite 6.16
-
-    :id: 3a6a848b-3c16-4dbb-8f52-5ea57a9a97ef
-
-    :expectedresults: The Organization details page notifies users that Simple Content Access will
-        be required for all organizations in Satellite 6.16
-    """
-    with target_sat.ui_session() as session:
-        session.organization.select(function_entitlement_manifest_org.name)
-        sca_alert = session.organization.read(
-            function_entitlement_manifest_org.name, widget_names='primary'
-        )
-        assert (
-            'Simple Content Access will be required for all organizations in Satellite 6.16.'
-            in sca_alert['primary']['sca_alert']
-        )

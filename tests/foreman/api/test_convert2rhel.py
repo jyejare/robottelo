@@ -11,6 +11,9 @@
 :Team: Rocket
 
 """
+
+import json
+
 import pytest
 import requests
 
@@ -135,13 +138,13 @@ def centos(
     ak.content_override(data={'content_overrides': [{'content_label': repo_label, 'value': '1'}]})
 
     # Register CentOS host with Satellite
-    command = module_target_sat.api.RegistrationCommand(
+    result = centos_host.api_register(
+        module_target_sat,
         organization=module_sca_manifest_org,
         activation_keys=[ak.name],
         location=smart_proxy_location,
-        insecure=True,
-    ).create()
-    assert centos_host.execute(command).status == 0
+    )
+    assert result.status == 0, f'Failed to register host: {result.stderr}'
 
     if centos_host.execute('needs-restarting -r').status == 1:
         centos_host.power_control(state='reboot')
@@ -165,17 +168,17 @@ def oracle(
 ):
     """Deploy and register Oracle host"""
     major = version.split('.')[0]
-    assert oracle_host.execute('yum -y update').status == 0
     # disable rhn-client-tools because it obsoletes the subscription manager package
     oracle_host.execute('echo "exclude=rhn-client-tools" >> /etc/yum.conf')
-
     # Install and set correct RHEL compatible kernel and using non-UEK kernel, based on C2R docs
-    result = oracle_host.execute(
-        'yum install -y kernel && '
-        'grubby --set-default /boot/vmlinuz-'
-        '`rpm -q --qf "%{BUILDTIME}\t%{EVR}.%{ARCH}\n" kernel | sort -nr | head -1 | cut -f2`'
+    assert (
+        oracle_host.execute(
+            'yum install -y kernel* && '
+            'grubby --set-default /boot/vmlinuz-'
+            '`rpm -q --qf "%{BUILDTIME}\t%{EVR}.%{ARCH}\n" kernel | sort -nr | head -1 | cut -f2`'
+        ).status
+        == 0
     )
-    assert result.status == 0
 
     if major == '8':
         # needs-restarting missing in OEL8
@@ -210,14 +213,14 @@ def oracle(
     ubi_url = settings.repos.convert2rhel.ubi7 if major == '7' else settings.repos.convert2rhel.ubi8
 
     # Register Oracle host with Satellite
-    command = module_target_sat.api.RegistrationCommand(
+    result = oracle_host.api_register(
+        module_target_sat,
         organization=module_sca_manifest_org,
         activation_keys=[ak.name],
         location=smart_proxy_location,
-        insecure=True,
         repo=ubi_url,
-    ).create()
-    assert oracle_host.execute(command).status == 0
+    )
+    assert result.status == 0, f'Failed to register host: {result.stderr}'
 
     yield oracle_host
     # close ssh session before teardown, because of reboot in conversion it may cause problems
@@ -232,7 +235,9 @@ def version(request):
 
 @pytest.mark.e2e
 @pytest.mark.parametrize('version', ['oracle7', 'oracle8'], indirect=True)
-def test_convert2rhel_oracle(module_target_sat, oracle, activation_key_rhel, version):
+def test_convert2rhel_oracle_with_pre_conversion_template_check(
+    module_target_sat, oracle, activation_key_rhel, version
+):
     """Convert Oracle linux to RHEL
 
     :id: 7fd393f0-551a-4de0-acdd-7f026b485f79
@@ -246,9 +251,13 @@ def test_convert2rhel_oracle(module_target_sat, oracle, activation_key_rhel, ver
         and subscription status
 
     :parametrized: yes
+
+    :Verifies: SAT-24654, SAT-24655
     """
+    target_os_name = 'Red Hat'
     major = version.split('.')[0]
     assert oracle.execute('yum -y update').status == 0
+
     if major == '8':
         # Fix inhibitor TAINTED_KMODS::TAINTED_KMODS_DETECTED - Tainted kernel modules detected
         blacklist_cfg = '/etc/modprobe.d/blacklist.conf'
@@ -259,6 +268,28 @@ def test_convert2rhel_oracle(module_target_sat, oracle, activation_key_rhel, ver
     host_content = module_target_sat.api.Host(id=oracle.hostname).read_json()
     assert host_content['operatingsystem_name'] == f"OracleLinux {version}"
 
+    # Pre-conversion template job
+    template_id = (
+        module_target_sat.api.JobTemplate()
+        .search(query={'search': 'name="Convert2RHEL analyze"'})[0]
+        .id
+    )
+    job = module_target_sat.api.JobInvocation().run(
+        synchronous=False,
+        data={
+            'job_template_id': template_id,
+            'targeting_type': 'static_query',
+            'search_query': f'name = {oracle.hostname}',
+        },
+    )
+    # wait for job to complete
+    module_target_sat.wait_for_tasks(
+        f'resource_type = JobInvocation and resource_id = {job["id"]}',
+        poll_timeout=5500,
+        search_rate=20,
+    )
+    result = module_target_sat.api.JobInvocation(id=job['id']).read()
+    assert result.succeeded == 1
     # execute job 'Convert 2 RHEL' on host
     template_id = (
         module_target_sat.api.JobTemplate().search(query={'search': 'name="Convert to RHEL"'})[0].id
@@ -270,7 +301,6 @@ def test_convert2rhel_oracle(module_target_sat, oracle, activation_key_rhel, ver
             'inputs': {
                 'Activation Key': activation_key_rhel.id,
                 'Restart': 'yes',
-                'Data telemetry': 'yes',
             },
             'targeting_type': 'static_query',
             'search_query': f'name = {oracle.hostname}',
@@ -291,13 +321,22 @@ def test_convert2rhel_oracle(module_target_sat, oracle, activation_key_rhel, ver
         or host_content['operatingsystem_name'].startswith(f'RedHat {version}')
         or host_content['operatingsystem_name'].startswith(f'RHEL {version}')
     )
-    assert host_content['subscription_status_label'] == 'Simple Content Access'
-    assert host_content['subscription_status'] == 5
+    # Wait for the host to be rebooted and SSH daemon to be started.
+    oracle.wait_for_connection()
+
+    # Verify convert2rhel facts are generated, and verify fact conversions.success is true
+    assert host_content['facts']['conversions::success'] == 'true'
+    convert2rhel_facts = json.loads(oracle.execute('cat /etc/rhsm/facts/convert2rhel.facts').stdout)
+    assert convert2rhel_facts['conversions.env.CONVERT2RHEL_THROUGH_FOREMAN'] == '1'
+    assert target_os_name in convert2rhel_facts['conversions.target_os.name']
+    assert convert2rhel_facts['conversions.success'] is True
 
 
 @pytest.mark.e2e
 @pytest.mark.parametrize('version', ['centos7', 'centos8'], indirect=True)
-def test_convert2rhel_centos(module_target_sat, centos, activation_key_rhel, version):
+def test_convert2rhel_centos_with_pre_conversion_template_check(
+    module_target_sat, centos, activation_key_rhel, version
+):
     """Convert CentOS linux to RHEL
 
     :id: 6f698440-7d85-4deb-8dd9-363ea9003b92
@@ -311,10 +350,37 @@ def test_convert2rhel_centos(module_target_sat, centos, activation_key_rhel, ver
         and subscription status
 
     :parametrized: yes
+
+    :Verifies: SAT-24654, SAT-24655
     """
+    target_os_name = 'Red Hat'
     host_content = module_target_sat.api.Host(id=centos.hostname).read_json()
     major = version.split('.')[0]
     assert host_content['operatingsystem_name'] == f'CentOS {major}'
+
+    # Pre-conversion template job
+    template_id = (
+        module_target_sat.api.JobTemplate()
+        .search(query={'search': 'name="Convert2RHEL analyze"'})[0]
+        .id
+    )
+    job = module_target_sat.api.JobInvocation().run(
+        synchronous=False,
+        data={
+            'job_template_id': template_id,
+            'targeting_type': 'static_query',
+            'search_query': f'name = {centos.hostname}',
+        },
+    )
+    # wait for job to complete
+    module_target_sat.wait_for_tasks(
+        f'resource_type = JobInvocation and resource_id = {job["id"]}',
+        poll_timeout=5500,
+        search_rate=20,
+    )
+    result = module_target_sat.api.JobInvocation(id=job['id']).read()
+    assert result.succeeded == 1
+
     # execute job 'Convert 2 RHEL' on host
     template_id = (
         module_target_sat.api.JobTemplate().search(query={'search': 'name="Convert to RHEL"'})[0].id
@@ -326,7 +392,6 @@ def test_convert2rhel_centos(module_target_sat, centos, activation_key_rhel, ver
             'inputs': {
                 'Activation Key': activation_key_rhel.id,
                 'Restart': 'yes',
-                'Data telemetry': 'yes',
             },
             'targeting_type': 'static_query',
             'search_query': f'name = {centos.hostname}',
@@ -349,5 +414,13 @@ def test_convert2rhel_centos(module_target_sat, centos, activation_key_rhel, ver
         or host_content['operatingsystem_name'].startswith(f'RedHat {version}')
         or host_content['operatingsystem_name'].startswith(f'RHEL {version}')
     )
-    assert host_content['subscription_status_label'] == 'Simple Content Access'
-    assert host_content['subscription_status'] == 5
+
+    # Wait for the host to be rebooted and SSH daemon to be started.
+    centos.wait_for_connection()
+
+    # Verify convert2rhel facts are generated, and verify fact conversions.success is true
+    assert host_content['facts']['conversions::success'] == 'true'
+    convert2rhel_facts = json.loads(centos.execute('cat /etc/rhsm/facts/convert2rhel.facts').stdout)
+    assert convert2rhel_facts['conversions.env.CONVERT2RHEL_THROUGH_FOREMAN'] == '1'
+    assert target_os_name in convert2rhel_facts['conversions.target_os.name']
+    assert convert2rhel_facts['conversions.success'] is True

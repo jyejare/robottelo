@@ -1,4 +1,5 @@
 """Unit tests for :mod:`robottelo.utils.decorators`."""
+
 from unittest import mock
 
 import pytest
@@ -28,7 +29,7 @@ class TestCacheable:
         """
         make_foo(cached=False)
         assert 'foo' not in decorators.OBJECT_CACHE
-        assert {} == decorators.OBJECT_CACHE
+        assert decorators.OBJECT_CACHE == {}
 
     def test_build_cache(self, make_foo):
         """Create a new object and add it to the cache."""

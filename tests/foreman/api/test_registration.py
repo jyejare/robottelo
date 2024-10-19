@@ -11,6 +11,7 @@
 :Team: Rocket
 
 """
+
 import uuid
 
 from fauxfactory import gen_ipaddr, gen_mac, gen_string
@@ -27,6 +28,8 @@ pytestmark = pytest.mark.tier1
 
 
 @pytest.mark.e2e
+@pytest.mark.pit_client
+@pytest.mark.rhel_ver_match('[^6]')
 @pytest.mark.no_containers
 def test_host_registration_end_to_end(
     module_sca_manifest_org,
@@ -50,15 +53,12 @@ def test_host_registration_end_to_end(
     :customerscenario: true
     """
     org = module_sca_manifest_org
-    command = module_target_sat.api.RegistrationCommand(
+    result = rhel_contenthost.api_register(
+        module_target_sat,
         organization=org,
         activation_keys=[module_activation_key.name],
-        location=module_location,
-    ).create()
-
-    result = rhel_contenthost.execute(command)
-    rc = 1 if rhel_contenthost.os_version.major == 6 else 0
-    assert result.status == rc, f'Failed to register host: {result.stderr}'
+    )
+    assert result.status == 0, f'Failed to register host: {result.stderr}'
 
     # Verify server.hostname and server.port from subscription-manager config
     assert module_target_sat.hostname == rhel_contenthost.subscription_config['server']['hostname']
@@ -69,17 +69,15 @@ def test_host_registration_end_to_end(
     module_target_sat.api.SmartProxy(id=nc.id, organization=[org]).update(['organization'])
     module_target_sat.api.SmartProxy(id=nc.id, location=[module_location]).update(['location'])
 
-    command = module_target_sat.api.RegistrationCommand(
+    result = rhel_contenthost.api_register(
+        module_target_sat,
         smart_proxy=nc,
         organization=org,
         activation_keys=[module_activation_key.name],
         location=module_location,
         force=True,
-    ).create()
-    result = rhel_contenthost.execute(command)
-
-    rc = 1 if rhel_contenthost.os_version.major == 6 else 0
-    assert result.status == rc, f'Failed to register host: {result.stderr}'
+    )
+    assert result.status == 0, f'Failed to register host: {result.stderr}'
 
     # Verify server.hostname and server.port from subscription-manager config
     assert (
@@ -90,6 +88,7 @@ def test_host_registration_end_to_end(
 
 
 @pytest.mark.tier3
+@pytest.mark.pit_client
 @pytest.mark.rhel_ver_match('[^6]')
 def test_positive_allow_reregistration_when_dmi_uuid_changed(
     module_sca_manifest_org,
@@ -113,30 +112,33 @@ def test_positive_allow_reregistration_when_dmi_uuid_changed(
     uuid_2 = str(uuid.uuid4())
     org = module_sca_manifest_org
     target_sat.execute(f'echo \'{{"dmi.system.uuid": "{uuid_1}"}}\' > /etc/rhsm/facts/uuid.facts')
-    command = target_sat.api.RegistrationCommand(
+    result = rhel_contenthost.api_register(
+        target_sat,
         organization=org,
         activation_keys=[module_activation_key.name],
         location=module_location,
-    ).create()
-    result = rhel_contenthost.execute(command)
+    )
+    assert result.status == 0, f'Failed to register host: {result.stderr}'
+    target_sat.execute(f'echo \'{{"dmi.system.uuid": "{uuid_2}"}}\' > /etc/rhsm/facts/uuid.facts')
+    result = rhel_contenthost.execute('subscription-manager unregister')
     assert result.status == 0
     result = rhel_contenthost.execute('subscription-manager clean')
     assert result.status == 0
-    target_sat.execute(f'echo \'{{"dmi.system.uuid": "{uuid_2}"}}\' > /etc/rhsm/facts/uuid.facts')
-    command = target_sat.api.RegistrationCommand(
+    result = rhel_contenthost.api_register(
+        target_sat,
         organization=org,
         activation_keys=[module_activation_key.name],
         location=module_location,
-    ).create()
-    result = rhel_contenthost.execute(command)
-    assert result.status == 0
+    )
+    assert result.status == 0, f'Failed to register host: {result.stderr}'
 
 
+@pytest.mark.rhel_ver_match('8')
 def test_positive_update_packages_registration(
     module_target_sat,
     module_sca_manifest_org,
     module_location,
-    rhel8_contenthost,
+    rhel_contenthost,
     module_activation_key,
 ):
     """Test package update on host post registration
@@ -146,28 +148,29 @@ def test_positive_update_packages_registration(
     :expectedresults: Package update is successful on host post registration.
     """
     org = module_sca_manifest_org
-    command = module_target_sat.api.RegistrationCommand(
+    result = rhel_contenthost.api_register(
+        module_target_sat,
         organization=org,
-        location=module_location,
         activation_keys=[module_activation_key.name],
+        location=module_location,
         update_packages=True,
-    ).create()
-    result = rhel8_contenthost.execute(command)
+    )
     assert result.status == 0, f'Failed to register host: {result.stderr}'
 
     package = constants.FAKE_7_CUSTOM_PACKAGE
     repo_url = settings.repos.yum_3['url']
-    rhel8_contenthost.create_custom_repos(fake_yum=repo_url)
-    result = rhel8_contenthost.execute(f"yum install -y {package}")
+    rhel_contenthost.create_custom_repos(fake_yum=repo_url)
+    result = rhel_contenthost.execute(f"yum install -y {package}")
     assert result.status == 0
 
 
+@pytest.mark.rhel_ver_match('8')
 @pytest.mark.no_containers
 def test_positive_rex_interface_for_global_registration(
     module_target_sat,
     module_sca_manifest_org,
     module_location,
-    rhel8_contenthost,
+    rhel_contenthost,
     module_activation_key,
 ):
     """Test remote execution interface is set for global registration
@@ -187,20 +190,21 @@ def test_positive_rex_interface_for_global_registration(
     ip = gen_ipaddr()
     # Create eth1 interface on the host
     add_interface_command = f'ip link add eth1 type dummy;ifconfig eth1 hw ether {mac_address};ip addr add {ip}/24 brd + dev eth1 label eth1:1;ip link set dev eth1 up'
-    result = rhel8_contenthost.execute(add_interface_command)
+    result = rhel_contenthost.execute(add_interface_command)
     assert result.status == 0
     org = module_sca_manifest_org
-    command = module_target_sat.api.RegistrationCommand(
+    result = rhel_contenthost.api_register(
+        module_target_sat,
         organization=org,
-        location=module_location,
         activation_keys=[module_activation_key.name],
+        location=module_location,
         update_packages=True,
         remote_execution_interface='eth1',
-    ).create()
-    result = rhel8_contenthost.execute(command)
+    )
     assert result.status == 0, f'Failed to register host: {result.stderr}'
+
     host = module_target_sat.api.Host().search(
-        query={'search': f'name={rhel8_contenthost.hostname}'}
+        query={'search': f'name={rhel_contenthost.hostname}'}
     )[0]
     # Check if eth1 interface is set for remote execution
     for interface in host.read_json()['interfaces']:
@@ -259,7 +263,6 @@ def test_negative_capsule_without_registration_enabled(
             organization=org,
             location=module_location,
             activation_keys=[module_ak_with_cv.name],
-            insecure=True,
         ).create()
     assert (
         "Proxy lacks one of the following features: 'Registration', 'Templates'"
@@ -305,7 +308,8 @@ def test_positive_host_registration_with_non_admin_user_with_setup_false(
         location=[module_location],
     ).create()
     user_cfg = user_nailgun_config(login, password)
-    command = module_target_sat.api.RegistrationCommand(
+    result = rhel_contenthost.api_register(
+        module_target_sat,
         server_config=user_cfg,
         organization=module_org,
         activation_keys=[module_activation_key.name],
@@ -314,8 +318,7 @@ def test_positive_host_registration_with_non_admin_user_with_setup_false(
         setup_remote_execution=False,
         setup_remote_execution_pull=False,
         update_packages=False,
-    ).create()
-    result = rhel_contenthost.execute(command)
+    )
     assert result.status == 0, f'Failed to register host: {result.stderr}'
 
     # verify package install for insights-client didn't run when Setup Insights is false
@@ -353,13 +356,92 @@ def test_negative_verify_bash_exit_status_failing_host_registration(
     """
     ak = module_target_sat.api.ActivationKey(name=gen_string('alpha')).create()
     # Try registration command generated with AK not in same as selected organization
-    command = module_target_sat.api.RegistrationCommand(
+    result = rhel_contenthost.api_register(
+        module_target_sat,
         organization=module_sca_manifest_org,
         activation_keys=[ak.name],
         location=module_location,
-    ).create()
-    result = rhel_contenthost.execute(command)
-
+    )
     # verify status code when registrationCommand fails to register on host
     assert result.status == 1
     assert 'Couldn\'t find activation key' in result.stderr
+
+
+@pytest.mark.upgrade
+@pytest.mark.parametrize('job_type', ['ansible', 'ssh'])
+@pytest.mark.rhel_ver_list([settings.content_host.default_rhel_version])
+@pytest.mark.no_containers
+def test_positive_katello_ca_crt_refresh(
+    module_target_sat,
+    module_sca_manifest_org,
+    module_location,
+    rhel_contenthost,
+    module_activation_key,
+    job_type,
+):
+    """Verify the host is registered and katello-server-ca cert is refreshed on the host after the successful execution of REX job.
+
+    :id: 11d80da8-6113-4a2d-a763-8d1d94cd2b67
+
+    :steps:
+        1. Register the host
+        2. Corrupt the CA cert file and verify it
+        3. Run rex job for refreshing the CA certificate
+        4. Check if the rex job is successfull and certificate is refreshed.
+
+    :expectedresults: Host is registered and katello-server-ca cert is refreshed.
+
+    :Verifies: SAT-18615
+
+    :customerscenario: true
+
+    :parametrized: yes
+    """
+    katello_ca_crt_path = '/etc/rhsm/ca/katello-server-ca.pem'
+    org = module_sca_manifest_org
+    result = rhel_contenthost.api_register(
+        module_target_sat,
+        organization=org,
+        activation_keys=[module_activation_key.name],
+    )
+    assert result.status == 0, f'Failed to register host: {result.stderr}'
+    ca_cert_file = len(str(rhel_contenthost.execute(f'cat {katello_ca_crt_path}')))
+
+    # corrupt the certificate file
+    corrupt_data = gen_string('alphanumeric')
+    result = rhel_contenthost.execute(f'sed -i "$ a {corrupt_data}" {katello_ca_crt_path}')
+    assert result.status == 0
+    corrupted_ca_crt_file = len(str(rhel_contenthost.execute(f'cat {katello_ca_crt_path}')))
+    assert ca_cert_file != corrupted_ca_crt_file
+
+    # run the rex job to refresh the CA certificate
+    template_name = (
+        'Download and execute a script' if job_type == 'ansible' else 'Download and run a script'
+    )
+    template_id = (
+        module_target_sat.api.JobTemplate()
+        .search(query={'search': f'name="{template_name}"'})[0]
+        .id
+    )
+
+    job = module_target_sat.api.JobInvocation().run(
+        synchronous=False,
+        data={
+            'job_template_id': template_id,
+            'targeting_type': 'static_query',
+            'search_query': f'name = {rhel_contenthost.hostname}',
+            'inputs': {
+                'url': f'https://{module_target_sat.hostname}/unattended/public/foreman_ca_refresh'
+            },
+        },
+    )
+    module_target_sat.wait_for_tasks(
+        f'resource_type = JobInvocation and resource_id = {job["id"]}', poll_timeout=1000
+    )
+    result = module_target_sat.api.JobInvocation(id=job['id']).read()
+    assert result.succeeded == 1
+    assert result.status_label == 'succeeded'
+
+    # check if the certificate file is refreshed
+    ca_file_after_refresh = len(str(rhel_contenthost.execute(f'cat {katello_ca_crt_path}')))
+    assert ca_cert_file == ca_file_after_refresh

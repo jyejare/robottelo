@@ -11,6 +11,7 @@
 :CaseImportance: High
 
 """
+
 import time
 
 from broker import Broker
@@ -25,14 +26,14 @@ from robottelo.utils.datafactory import gen_string
 
 @pytest.fixture(scope='module')
 def module_manifest():
-    with Manifester(manifest_category=settings.manifest.entitlement) as manifest:
+    with Manifester(manifest_category=settings.manifest.golden_ticket) as manifest:
         yield manifest
 
 
 @pytest.fixture(scope='module')
 def module_org_with_parameter(module_target_sat, module_manifest):
     # adding remote_execution_connect_by_ip=Yes at org level
-    org = module_target_sat.api.Organization(simple_content_access=False).create()
+    org = module_target_sat.api.Organization().create()
     module_target_sat.api.Parameter(
         name='remote_execution_connect_by_ip',
         parameter_type='boolean',
@@ -60,7 +61,7 @@ def module_repos_collection(module_org_with_parameter, module_lce, module_target
             module_target_sat.cli_factory.YumRepository(url=settings.repos.yum_6.url),
         ],
     )
-    repos_collection.setup_content(module_org_with_parameter.id, module_lce.id)
+    repos_collection.setup_content(module_org_with_parameter.id, module_lce.id, override=True)
     return repos_collection
 
 
@@ -204,9 +205,7 @@ def _get_content_repository_urls(repos_collection, lce, content_view, module_tar
 
 @pytest.mark.tier2
 @pytest.mark.upgrade
-def test_positive_end_to_end(
-    session, module_target_sat, module_org_with_parameter, smart_proxy_location
-):
+def test_positive_end_to_end(module_target_sat, module_org_with_parameter, smart_proxy_location):
     """Perform end to end testing for host collection component
 
     :id: 1d40bc74-8e05-42fa-b6e3-2999dc3b730d
@@ -221,7 +220,8 @@ def test_positive_end_to_end(
     host = module_target_sat.api.Host(
         organization=module_org_with_parameter, location=smart_proxy_location
     ).create()
-    with session:
+    with module_target_sat.ui_session() as session:
+        session.organization.select(module_org_with_parameter.name)
         session.location.select(smart_proxy_location.name)
         # Create new host collection
         session.hostcollection.create(
@@ -252,7 +252,7 @@ def test_positive_end_to_end(
 
 @pytest.mark.tier2
 def test_negative_install_via_remote_execution(
-    session, module_target_sat, module_org_with_parameter, smart_proxy_location
+    module_target_sat, module_org_with_parameter, smart_proxy_location
 ):
     """Test basic functionality of the Hosts collection UI install package via
     remote execution.
@@ -274,7 +274,8 @@ def test_negative_install_via_remote_execution(
     host_collection = module_target_sat.api.HostCollection(
         host=[host.id for host in hosts], organization=module_org_with_parameter
     ).create()
-    with session:
+    with module_target_sat.ui_session() as session:
+        session.organization.select(module_org_with_parameter.name)
         session.location.select(smart_proxy_location.name)
         job_values = session.hostcollection.manage_packages(
             host_collection.name,
@@ -290,7 +291,7 @@ def test_negative_install_via_remote_execution(
 
 @pytest.mark.tier2
 def test_negative_install_via_custom_remote_execution(
-    session, module_target_sat, module_org_with_parameter, smart_proxy_location
+    module_target_sat, module_org_with_parameter, smart_proxy_location
 ):
     """Test basic functionality of the Hosts collection UI install package via
     remote execution - customize first.
@@ -312,7 +313,8 @@ def test_negative_install_via_custom_remote_execution(
     host_collection = module_target_sat.api.HostCollection(
         host=[host.id for host in hosts], organization=module_org_with_parameter
     ).create()
-    with session:
+    with module_target_sat.ui_session() as session:
+        session.organization.select(module_org_with_parameter.name)
         session.location.select(smart_proxy_location.name)
         job_values = session.hostcollection.manage_packages(
             host_collection.name,
@@ -515,7 +517,6 @@ def test_positive_install_errata(
         assert _is_package_installed(vm_content_hosts, constants.FAKE_2_CUSTOM_PACKAGE)
 
 
-@pytest.mark.skip_if_open("BZ:2094815")
 @pytest.mark.tier3
 def test_positive_change_assigned_content(
     session,
@@ -626,9 +627,7 @@ def test_positive_change_assigned_content(
 
 
 @pytest.mark.tier3
-def test_negative_hosts_limit(
-    session, module_target_sat, module_org_with_parameter, smart_proxy_location
-):
+def test_negative_hosts_limit(module_target_sat, module_org_with_parameter, smart_proxy_location):
     """Check that Host limit actually limits usage
 
     :id: 57b70977-2110-47d9-be3b-461ad15c70c7
@@ -663,7 +662,8 @@ def test_negative_hosts_limit(
             ).create()
         )
     assert len(hosts) == 2
-    with session:
+    with module_target_sat.ui_session() as session:
+        session.organization.select(module_org_with_parameter.name)
         session.location.select(smart_proxy_location.name)
         session.hostcollection.create({'name': hc_name, 'unlimited_hosts': False, 'max_hosts': 1})
         assert session.hostcollection.search(hc_name)[0]['Name'] == hc_name
@@ -756,8 +756,8 @@ def test_positive_install_modular_errata(
     """
     stream = "0"
     version = "20180704111719"
-    _module_install_command = 'dnf -y module install {}:{}:{}'.format(
-        constants.FAKE_4_CUSTOM_PACKAGE_NAME, stream, version
+    _module_install_command = (
+        f'dnf -y module install {constants.FAKE_4_CUSTOM_PACKAGE_NAME}:{stream}:{version}'
     )
     _run_remote_command_on_content_hosts(_module_install_command, vm_content_hosts_module_stream)
     _run_remote_command_on_content_hosts('dnf -y upload-profile', vm_content_hosts_module_stream)

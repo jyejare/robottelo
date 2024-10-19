@@ -2,7 +2,6 @@ import copy
 import socket
 
 from box import Box
-from nailgun import entities
 import pytest
 
 from robottelo.config import settings
@@ -18,7 +17,6 @@ from robottelo.constants import (
 from robottelo.hosts import IPAHost, SSOHost
 from robottelo.utils.datafactory import gen_string
 from robottelo.utils.installer import InstallerCommand
-from robottelo.utils.issue_handlers import is_open
 
 LOGGEDOUT = 'Logged out.'
 
@@ -36,11 +34,11 @@ def default_ipa_host(module_target_sat):
 
 
 @pytest.fixture
-def ldap_cleanup():
+def ldap_cleanup(target_sat):
     """this is an extra step taken to clean any existing ldap source"""
-    ldap_auth_sources = entities.AuthSourceLDAP().search()
+    ldap_auth_sources = target_sat.api.AuthSourceLDAP().search()
     for ldap_auth in ldap_auth_sources:
-        users = entities.User(auth_source=ldap_auth).search()
+        users = target_sat.api.User(auth_source=ldap_auth).search()
         for user in users:
             user.delete()
         ldap_auth.delete()
@@ -55,6 +53,7 @@ def ad_data():
         if version in supported_server_versions:
             ad_server_details = {
                 'ldap_user_name': settings.ldap.username,
+                'ldap_user_shown_name': settings.ldap.user_shown_name,
                 'ldap_user_cn': settings.ldap.username,
                 'ldap_user_passwd': settings.ldap.password,
                 'base_dn': settings.ldap.basedn,
@@ -79,6 +78,7 @@ def ad_data():
 def ipa_data():
     return {
         'ldap_user_name': settings.ipa.user,
+        'ldap_user_shown_name': settings.ipa.user_shown_name,
         'ldap_user_cn': settings.ipa.username,
         'ipa_otp_username': settings.ipa.otp_user,
         'ldap_user_passwd': settings.ipa.password,
@@ -96,6 +96,7 @@ def ipa_data():
 def open_ldap_data():
     return {
         'ldap_user_name': settings.open_ldap.open_ldap_user,
+        'ldap_user_shown_name': settings.open_ldap.user_shown_name,
         'ldap_user_cn': settings.open_ldap.username,
         'ldap_hostname': settings.open_ldap.hostname,
         'ldap_user_passwd': settings.open_ldap.password,
@@ -105,9 +106,9 @@ def open_ldap_data():
 
 
 @pytest.fixture
-def auth_source(ldap_cleanup, module_org, module_location, ad_data):
+def auth_source(ldap_cleanup, module_target_sat, module_org, module_location, ad_data):
     ad_data = ad_data()
-    return entities.AuthSourceLDAP(
+    return module_target_sat.api.AuthSourceLDAP(
         onthefly_register=True,
         account=ad_data['ldap_user_name'],
         account_password=ad_data['ldap_user_passwd'],
@@ -128,8 +129,8 @@ def auth_source(ldap_cleanup, module_org, module_location, ad_data):
 
 
 @pytest.fixture
-def auth_source_ipa(ldap_cleanup, default_ipa_host, module_org, module_location):
-    return entities.AuthSourceLDAP(
+def auth_source_ipa(ldap_cleanup, default_ipa_host, module_target_sat, module_org, module_location):
+    return module_target_sat.api.AuthSourceLDAP(
         onthefly_register=True,
         account=default_ipa_host.ldap_user_cn,
         account_password=default_ipa_host.ldap_user_passwd,
@@ -150,8 +151,14 @@ def auth_source_ipa(ldap_cleanup, default_ipa_host, module_org, module_location)
 
 
 @pytest.fixture
-def auth_source_open_ldap(ldap_cleanup, module_org, module_location, open_ldap_data):
-    return entities.AuthSourceLDAP(
+def auth_source_open_ldap(
+    ldap_cleanup,
+    module_target_sat,
+    module_org,
+    module_location,
+    open_ldap_data,
+):
+    return module_target_sat.api.AuthSourceLDAP(
         onthefly_register=True,
         account=open_ldap_data['ldap_user_cn'],
         account_password=open_ldap_data['ldap_user_passwd'],
@@ -282,42 +289,45 @@ def auth_data(request, ad_data, ipa_data):
 @pytest.fixture(scope='module')
 def enroll_configure_rhsso_external_auth(module_target_sat):
     """Enroll the Satellite6 Server to an RHSSO Server."""
-    module_target_sat.execute(
-        'yum -y --disableplugin=foreman-protector install '
-        'mod_auth_openidc keycloak-httpd-client-install'
+    module_target_sat.register_to_cdn()
+    # keycloak-httpd-client-install needs lxml but it's not an rpm dependency + is not documented
+    assert (
+        module_target_sat.execute(
+            'yum -y --disableplugin=foreman-protector install '
+            'mod_auth_openidc keycloak-httpd-client-install python3-lxml '
+        ).status
+        == 0
     )
     # if target directory not given it is installing in /usr/local/lib64
-    module_target_sat.execute('python3 -m pip install lxml -t /usr/lib64/python3.6/site-packages')
-    module_target_sat.execute(
-        f'openssl s_client -connect {settings.rhsso.host_name} -showcerts </dev/null 2>/dev/null| '
-        f'sed "/BEGIN CERTIFICATE/,/END CERTIFICATE/!d" > {CERT_PATH}/rh-sso.crt'
+    assert (
+        module_target_sat.execute(
+            f'openssl s_client -connect {settings.rhsso.host_name}:443 -showcerts </dev/null 2>/dev/null| '
+            f'sed "/BEGIN CERTIFICATE/,/END CERTIFICATE/!d" > {CERT_PATH}/rh-sso.crt'
+        ).status
+        == 0
     )
-    module_target_sat.execute(
-        f'sshpass -p "{settings.rhsso.rhsso_password}" scp -o "StrictHostKeyChecking no" '
-        f'root@{settings.rhsso.host_name}:/root/ca_certs/*.crt {CERT_PATH}'
-    )
-    module_target_sat.execute('update-ca-trust')
-    module_target_sat.execute(
-        f'echo {settings.rhsso.rhsso_password} | keycloak-httpd-client-install \
+    assert (
+        module_target_sat.execute(
+            f'echo {settings.rhsso.rhsso_password} | keycloak-httpd-client-install \
                 --app-name foreman-openidc \
                 --keycloak-server-url {settings.rhsso.host_url} \
                 --keycloak-admin-username "admin" \
                 --keycloak-realm "{settings.rhsso.realm}" \
                 --keycloak-admin-realm master \
                 --keycloak-auth-role root-admin -t openidc -l /users/extlogin --force'
+        ).status
+        == 0
     )
-    if is_open('BZ:2113905'):
+    assert (
         module_target_sat.execute(
-            r"sed -i -e '$aapache::default_mods:\n  - authn_core' "
-            "/etc/foreman-installer/custom-hiera.yaml"
-        )
-    module_target_sat.execute(
-        f'satellite-installer --foreman-keycloak true '
-        f"--foreman-keycloak-app-name 'foreman-openidc' "
-        f"--foreman-keycloak-realm '{settings.rhsso.realm}' ",
-        timeout=1000000,
+            f'satellite-installer --foreman-keycloak true '
+            f"--foreman-keycloak-app-name 'foreman-openidc' "
+            f"--foreman-keycloak-realm '{settings.rhsso.realm}' ",
+            timeout=1000000,
+        ).status
+        == 0
     )
-    module_target_sat.execute('systemctl restart httpd')
+    assert module_target_sat.execute('systemctl restart httpd').status == 0
 
 
 @pytest.fixture(scope='module')
@@ -456,10 +466,10 @@ def configure_hammer_no_negotiate(parametrized_enrolled_sat):
 def hammer_logout(parametrized_enrolled_sat):
     """Logout in Hammer."""
     result = parametrized_enrolled_sat.cli.Auth.logout()
-    assert result.split("\n")[1] == LOGGEDOUT
+    assert result[0]['message'] == LOGGEDOUT
     yield
     result = parametrized_enrolled_sat.cli.Auth.logout()
-    assert result.split("\n")[1] == LOGGEDOUT
+    assert result[0]['message'] == LOGGEDOUT
 
 
 @pytest.fixture

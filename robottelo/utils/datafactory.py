@@ -1,7 +1,9 @@
 """Data Factory for all entities"""
+
 from functools import wraps
 import random
 import string
+from string import punctuation
 from urllib.parse import quote_plus
 
 from fauxfactory import gen_alpha, gen_integer, gen_string, gen_url, gen_utf8
@@ -81,7 +83,7 @@ def generate_strings_list(length=None, exclude_types=None, min_length=3, max_len
         generated list. example: exclude_types=['html', 'cjk']
     :param int min_length: Minimum length to be used in integer generator
     :param int max_length: Maximum length to be used in integer generator
-    :returns: A list of various string types.
+    :return: A list of various string types.
 
     """
     if length is None:
@@ -407,7 +409,7 @@ def valid_names_list():
         f"νέος χρήστης-{gen_string('utf8', 2)}",
         f"foo@!#$^&*( ) {gen_string('utf8')}",
         f"<blink>{gen_string('utf8')}</blink>",
-        f"bar+{{}}|\"?hi {gen_string('utf8')}",
+        f"bar+{{}}|?hi {gen_string('utf8')}",
         f" {gen_string('utf8')}",
         f"{gen_string('utf8')} ",
     ]
@@ -622,6 +624,11 @@ def valid_docker_upstream_names():
 @filtered_datapoint
 def valid_url_list():
     return [gen_url(scheme="http"), gen_url(scheme="https")]
+
+
+@filtered_datapoint
+def invalid_url_list():
+    return invalid_names_list() + [f'http://{gen_string("alpha")}{punctuation}.com']
 
 
 @filtered_datapoint
