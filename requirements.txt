@@ -6,7 +6,7 @@ broker[docker,podman,hussh]==0.5.7
 cryptography==43.0.1
 deepdiff==8.0.1
 dynaconf[vault]==3.2.6
-fauxfactory==3.1.1
+fauxfactory==4.2.3
 jinja2==3.1.4
 manifester==0.2.8
 navmazing==1.2.2
